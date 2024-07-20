@@ -389,7 +389,8 @@ class AzureDataset(BaseDataset):
         self.rays_d = None
         self.frame_ids = range(0, len(self.img_files))
         self.num_frames = len(self.frame_ids)
-        self.load_poses(os.path.join(self.basedir, 'pose'))  
+        self.load_poses(os.path.join(
+            self.basedir, 'scene', 'trajectory.log'))
 
         if self.config['cam']['crop_edge'] > 0:
             self.H -= self.config['cam']['crop_edge']*2

@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 import trimesh
-import marching_cubes as mcubes
+import mcubes
 from matplotlib import pyplot as plt
 
 
@@ -93,7 +93,7 @@ def extract_mesh(query_fn, config, bounding_box, marching_cube_bound=None, color
     
 
     print('Running Marching Cubes')
-    vertices, triangles = mcubes.marching_cubes(raw.squeeze(), isolevel, truncation=3.0)
+    vertices, triangles = mcubes.marching_cubes(raw.squeeze(), isolevel)
     print('done', vertices.shape, triangles.shape)
 
     # normalize vertex positions

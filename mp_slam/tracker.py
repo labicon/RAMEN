@@ -138,7 +138,7 @@ class Tracker():
         # from torch.profiler import profile, record_function, ProfilerActivity
         # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
         #     with record_function("slam"):
-        for idx, batch in tqdm(enumerate(self.data_loader)):
+        for idx, batch in enumerate(tqdm(self.data_loader)):
             if idx == 0:
                 continue
             while self.mapping_idx[0] < idx-self.config['mapping']['map_every']-\

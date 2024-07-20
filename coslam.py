@@ -634,7 +634,7 @@ class CoSLAM():
         data_loader = DataLoader(self.dataset, num_workers=self.config['data']['num_workers'])
 
         # Start Co-SLAM!
-        for i, batch in tqdm(enumerate(data_loader)):
+        for i, batch in enumerate(tqdm(data_loader)):
             # Visualisation
             if self.config['mesh']['visualisation']:
                 rgb = cv2.cvtColor(batch["rgb"].squeeze().cpu().numpy(), cv2.COLOR_BGR2RGB)
