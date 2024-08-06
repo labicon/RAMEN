@@ -2,10 +2,19 @@ inherit_from: configs/Replica/replica.yaml
 mapping:
   bound: [[-3,3],[-4,2.5],[-2,2.5]]
   marching_cubes_bound: [[-2.2,2.6],[-3.4,2.1],[-1.4,2.0]]
-  
+
+mesh: 
+  vis: 100  
 
 data:
   datadir: data/Replica/office0
   trainskip: 1
   output: output/Replica/office0
-  exp_name: demo_multi_agent
+  exp_name: multi_agent_test5
+
+multi_agents:
+  num_agents: 3 
+  edges_list: [[0,1], [0,2], [1,2]]
+  distributed_algorithm: 'CADMM'
+  rho: 0
+  com_every: 10

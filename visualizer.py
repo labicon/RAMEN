@@ -161,6 +161,7 @@ def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list
     vis.create_window(window_name=output, height=1080, width=1920)
     vis.get_render_option().point_size = 4
     vis.get_render_option().mesh_show_back_face = False
+    vis.get_render_option().show_coordinate_frame = True #red-x, green-y, blue-z 
 
     ctr = vis.get_view_control()
     ctr.set_constant_z_near(near)
@@ -218,6 +219,7 @@ if __name__ == '__main__':
     """
         Black: ground truth 
         Red: Predicted trajectory
+        python .\visualizer.py --config .\configs\Replica\office0_agents.yaml --agent agent_2 --start_frame 1332
     """
     parser = argparse.ArgumentParser(
         description='Arguments to visualize the SLAM process.'
@@ -227,11 +229,16 @@ if __name__ == '__main__':
                         action='store_true', help='visualize input frames')
     parser.add_argument('--no_gt_traj',
                         action='store_true', help='not visualize gt trajectory')
+    parser.add_argument('--agent', default=None, type=str)
+    parser.add_argument('--start_frame', default=0, type=int)
     args = parser.parse_args()
     cfg = config.load_config(args.config)
 
     # get estimated poses
-    ckptsdir = os.path.join(cfg['data']['output'], cfg['data']['exp_name'])
+    if args.agent is not None:
+        ckptsdir = os.path.join(cfg['data']['output'], cfg['data']['exp_name'], args.agent) 
+    else:
+        ckptsdir = os.path.join(cfg['data']['output'], cfg['data']['exp_name']) 
     if os.path.exists(ckptsdir):
         ckpts = [os.path.join(ckptsdir, f)
                  for f in sorted(os.listdir(ckptsdir)) if 'pt' in f] 
@@ -242,11 +249,12 @@ if __name__ == '__main__':
             ckpt = torch.load(ckpt_path, map_location=torch.device('cpu'))
             estimate_c2w_list = list(ckpt['pose'].values())
     estimate_c2w_list = torch.stack(estimate_c2w_list).cpu().numpy()
+    num_frames = len(estimate_c2w_list)
 
     # get gt poses
     dataset = get_dataset(cfg)
     gt_c2w_list = dataset.poses
-    gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()
+    gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()[args.start_frame : args.start_frame+num_frames]
     frontend = SLAMFrontend(ckptsdir, init_pose=estimate_c2w_list[0], cam_scale=0.3,
                             near=0, estimate_c2w_list=estimate_c2w_list, gt_c2w_list=gt_c2w_list).start()
 
@@ -254,7 +262,7 @@ if __name__ == '__main__':
     for i in tqdm(range(0, len(estimate_c2w_list))):
         # show every second frame for speed up
         if args.vis_input_frame and i % 2 == 0:
-            ret = dataset[i]
+            ret = dataset[args.start_frame + i]
             gt_color = ret['rgb']
             gt_depth = ret['depth']
             depth_np = gt_depth.numpy()
