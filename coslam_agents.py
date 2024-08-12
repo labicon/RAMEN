@@ -53,6 +53,11 @@ class CoSLAM():
         self.neighbors = []
         # step size in the gradient ascent of the dual variable
         self.rho = config['multi_agents']['rho']
+        
+        self.com_perIter = 0 # communication cost in MB per communication iteration 
+        self.com_total = 0 # total accumulated communication cost in MB 
+
+        self.gt_pose = config['tracking']['gt_pose']
 
 
     def seed_everything(self, seed):
@@ -479,6 +484,9 @@ class CoSLAM():
             # Use the pose after the last iteration
             self.est_c2w_data[frame_id] = c2w_est.detach().clone()[0]
 
+        if self.gt_pose:
+            self.est_c2w_data[frame_id] = c2w_gt
+
        # Save relative pose of non-keyframes
         if frame_id % self.config['mapping']['keyframe_every'] != 0:
             kf_id = frame_id // self.config['mapping']['keyframe_every']
@@ -564,9 +572,6 @@ class CoSLAM():
             self.save_mesh(i, voxel_size=self.config['mesh']['voxel_final'])
         
 
-
-
-
 def create_agent_graph(cfg, dataset):
     """
         @param cfg:
@@ -596,6 +601,27 @@ def create_agent_graph(cfg, dataset):
     return G, frames_per_agent
 
 
+def get_data_memory(dataset, cfg, frames_per_agent):
+    num_agents = cfg['multi_agents']['num_agents']
+    output_path = os.path.join(cfg['data']['output'], cfg['data']['exp_name'])
+    rgb = dataset[0]['rgb']
+    depth = dataset[0]['depth']
+    rgb_memory = torch.numel(rgb)*rgb.element_size() / 1e6 # bytes to megabytes
+    depth_memory = torch.numel(depth)*depth.element_size() / 1e6 # bytes to megabytes
+    single_size= f'size of a rgb img and a depth img: {rgb_memory + depth_memory} MB\n'
+    total_size = f'total size of all images shared for centralized training: {(rgb_memory + depth_memory)*frames_per_agent*(num_agents-1)} MB\n'
+    
+    # Save to a text file
+    print("Save Memory Info")
+    with open(os.path.join(output_path, 'memory_sizes.txt'), 'w') as file:
+        file.write(single_size)
+        file.write(total_size)
+
+
+def get_model_memory(model):
+    model_tensor = p2v(model.parameters())
+    model_size = torch.numel(model_tensor)*model_tensor.element_size() / 1e6 # bytes to megabytes
+    return model_size
 
 
 def train_multi_agent(cfg):
@@ -604,6 +630,8 @@ def train_multi_agent(cfg):
 
     G, frames_per_agent = create_agent_graph(cfg, dataset)
 
+    get_data_memory(dataset, cfg, frames_per_agent)
+
     for step in trange(0, frames_per_agent, smoothing=0):
         # commnuication
         if step % cfg['multi_agents']['com_every'] == 0:
@@ -611,10 +639,14 @@ def train_multi_agent(cfg):
                 print(f'\nAgent {i} Communicating')
                 agent_i = G.nodes[i]['agent']
                 agent_i.neighbors = [] # clear communication buffer, only save the latest weights
+                agent_i.com_perIter = 0
                 for j, edge_attr in nbrs.items():
                     agent_j = G.nodes[j]['agent']
                     agent_i.communicate(agent_j.model)
-
+                    model_size = get_model_memory(agent_j.model)
+                    agent_i.com_perIter += model_size
+                    agent_i.com_total += model_size
+             
         # update
         for i, nbrs in G.adj.items():
             agent_i = G.nodes[i]['agent']
@@ -624,12 +656,21 @@ def train_multi_agent(cfg):
                 batch_i[key] = batch_i[key].unsqueeze(0)
             agent_i.run(step, batch_i)
 
-
+    # write communication info
+    output_path = os.path.join(cfg['data']['output'], cfg['data']['exp_name'])
+    for i, nbrs in G.adj.items():
+        agent_i = G.nodes[i]['agent']
+        com_perIter = f'Agent {i} message received per communication iteration: {agent_i.com_perIter} MB\n'
+        com_total = f'Agent {i} total message received: {agent_i.com_total} MB\n'
+        with open(os.path.join(output_path, 'memory_sizes.txt'), 'a') as file: # mode 'a' for append mode, so you can add new content without deleting the previous one
+            file.write(com_perIter)
+            file.write(com_total)
+    print("Agent Communication Info Saved")
 
 
 if __name__ == '__main__':
     """
-         python .\coslam_agents.py --config .\configs\Replica\office0_agents.yaml
+         python .\coslam_agents.py --config .\configs\Azure\apartment_agents.yaml
     """
 
     print('Start running...')

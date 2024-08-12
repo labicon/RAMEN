@@ -168,3 +168,9 @@ output/
 
 # dataset 
 data/
+
+# camera parameters of visualizer 
+*.npy
+
+# for local test code 
+test.ipynb

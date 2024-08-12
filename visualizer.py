@@ -1,5 +1,6 @@
 import argparse
 import os
+import glob
 import time
 import numpy as np
 import torch
@@ -14,15 +15,26 @@ import config
 from datasets.dataset import get_dataset
 import sys 
 
+def extrinsic_to_camera_params(extrinsic_matrix):
+    # Extract rotation and translation
+    R = extrinsic_matrix[:3, :3]
+    t = extrinsic_matrix[:3, 3]
 
+    camera_position = -R.T @ t
+    up_vector = R.T @ np.array([0, -1, 0])
+    front_vector = R.T @ np.array([0, 0, -1])
 
+    # LookAt is the point in the world the camera is looking at
+    look_at_position = camera_position + front_vector
+
+    return camera_position, look_at_position, up_vector
 
 
 def normalize(x):
     return x / np.linalg.norm(x)
 
 
-def create_camera_actor(i, is_gt=False, scale=0.005):
+def create_camera_actor(i, color_list, is_gt=False, scale=0.005):
     cam_points = scale * np.array([
         [0,   0,   0],
         [-1,  -1, 1.5],
@@ -45,7 +57,7 @@ def create_camera_actor(i, is_gt=False, scale=0.005):
             (1.-t_vals)[:, None] + end_points[None, :] * (t_vals)[:, None]
         points.append(point)
     points = np.concatenate(points)
-    color = (0.0, 0.0, 0.0) if is_gt else (1.0, .0, .0)
+    color = (0.0, 0.0, 0.0) if is_gt else color_list[i]
     camera_actor = o3d.geometry.PointCloud(
         points=o3d.utility.Vector3dVector(points))
     camera_actor.paint_uniform_color(color)
@@ -53,7 +65,7 @@ def create_camera_actor(i, is_gt=False, scale=0.005):
     return camera_actor
 
 
-def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list, gt_c2w_list):
+def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic):
 
     draw_trajectory.queue = queue
     draw_trajectory.cameras = {}
@@ -64,7 +76,19 @@ def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list
     draw_trajectory.frame_idx = 0
     draw_trajectory.traj_actor = None
     draw_trajectory.traj_actor_gt = None
-
+    draw_trajectory.color_list =    [
+                                        (1.0, 0.0, 0.0),   # Red
+                                        (0.0, 1.0, 0.0),   # Green
+                                        (0.0, 0.0, 1.0),   # Blue
+                                        (1.0, 0.647, 0.0), # Orange
+                                        (1.0, 1.0, 0.0),   # Yellow
+                                        (0.502, 0.0, 0.502), # Purple
+                                        (0.0, 1.0, 1.0),   # Cyan
+                                        (1.0, 0.753, 0.796), # Pink
+                                        (0.0, 0.502, 0.0), # Dark Green
+                                        (1.0, 0.412, 0.706) # Hot Pink
+                                    ]
+    draw_trajectory.num_frames = num_frames
     def animation_callback(vis):
         cam = vis.get_view_control().convert_to_pinhole_camera_parameters()
         while True:
@@ -88,7 +112,7 @@ def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list
                             vis.update_geometry(pc)
 
                     else:
-                        cam_actor = create_camera_actor(i, is_gt, cam_scale)
+                        cam_actor = create_camera_actor(i, draw_trajectory.color_list, is_gt, cam_scale)
                         cam_actor.transform(pose)
                         vis.add_geometry(cam_actor)
 
@@ -113,25 +137,29 @@ def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list
                 elif data[0] == 'traj':
                     i, is_gt = data[1:]
 
-                    color = (0.0, 0.0, 0.0) if is_gt else (1.0, .0, .0)
-                    traj_actor = o3d.geometry.PointCloud(
-                        points=o3d.utility.Vector3dVector(gt_c2w_list[1:i, :3, 3] if is_gt else estimate_c2w_list[1:i, :3, 3]))
-                    traj_actor.paint_uniform_color(color)
-
                     if is_gt:
                         if draw_trajectory.traj_actor_gt is not None:
                             vis.remove_geometry(draw_trajectory.traj_actor_gt)
                             tmp = draw_trajectory.traj_actor_gt
                             del tmp
-                        draw_trajectory.traj_actor_gt = traj_actor
-                        vis.add_geometry(draw_trajectory.traj_actor_gt)
                     else:
                         if draw_trajectory.traj_actor is not None:
                             vis.remove_geometry(draw_trajectory.traj_actor)
                             tmp = draw_trajectory.traj_actor
                             del tmp
-                        draw_trajectory.traj_actor = traj_actor
-                        vis.add_geometry(draw_trajectory.traj_actor)
+
+                    for agent_id, agent_est_c2w in enumerate(estimate_c2w_list_agents):
+                        color = (0.0, 0.0, 0.0) if is_gt else draw_trajectory.color_list[agent_id]
+                        traj_actor = o3d.geometry.PointCloud(
+                            points=o3d.utility.Vector3dVector(gt_c2w_list[(draw_trajectory.num_frames*agent_id+1):(draw_trajectory.num_frames*agent_id+i), :3, 3] if is_gt else agent_est_c2w[1:i, :3, 3]))
+                        traj_actor.paint_uniform_color(color)
+
+                        if is_gt:
+                            draw_trajectory.traj_actor_gt = traj_actor
+                            vis.add_geometry(draw_trajectory.traj_actor_gt)
+                        else:
+                            draw_trajectory.traj_actor = traj_actor
+                            vis.add_geometry(draw_trajectory.traj_actor)
 
                 elif data[0] == 'reset':
                     draw_trajectory.warmup = -1
@@ -163,31 +191,34 @@ def draw_trajectory(queue, output, init_pose, cam_scale, near, estimate_c2w_list
     vis.get_render_option().mesh_show_back_face = False
     vis.get_render_option().show_coordinate_frame = True #red-x, green-y, blue-z 
 
+    # set up view control 
     ctr = vis.get_view_control()
-    ctr.set_constant_z_near(near)
-    ctr.set_constant_z_far(1000)
-
-    # set he viewer's pose in the back of the first frame's pose
-    param = ctr.convert_to_pinhole_camera_parameters()
-    init_pose[:3, 3] += 2*normalize(init_pose[:3, 2])
-    init_pose[:3, 2] *= -1
-    init_pose[:3, 1] *= -1
-    init_pose = np.linalg.inv(init_pose)
-
-    param.extrinsic = init_pose 
-    ctr.convert_from_pinhole_camera_parameters(param) 
+    if camera_params_extrinsic is not None:
+        camera_position, look_at_position, up_vector = extrinsic_to_camera_params(camera_params_extrinsic)
+        # Set the camera parameters
+        ctr.set_front((look_at_position - camera_position))
+        ctr.set_lookat(look_at_position)
+        ctr.set_up(up_vector)
+        ctr.set_zoom(1.0)  # Adjust zoom as necessary
 
     vis.run()
+
+    # get current camera parameters 
+    camera_params = ctr.convert_to_pinhole_camera_parameters()
+    np.save('camera_params_extrinsic.npy', camera_params.extrinsic)
+    print('camera parameters saved for view control')
+
     vis.destroy_window()
 
 
 class SLAMFrontend:
-    def __init__(self, output, init_pose, cam_scale=1,
-                 near=0, estimate_c2w_list=None, gt_c2w_list=None):
+
+    def __init__(self, output, cam_scale=1,
+                 estimate_c2w_list_agents=None, gt_c2w_list=None, num_frames=0, camera_params_extrinsic=None):
         self.queue = Queue()
         self.p = Process(target=draw_trajectory, args=(
-            self.queue, output, init_pose, cam_scale, 
-            near, estimate_c2w_list, gt_c2w_list))
+            self.queue, output, cam_scale, 
+            estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic))
 
     def update_pose(self, index, pose, gt=False):
         if isinstance(pose, torch.Tensor):
@@ -213,32 +244,7 @@ class SLAMFrontend:
         self.p.join()
 
 
-
-
-if __name__ == '__main__':
-    """
-        Black: ground truth 
-        Red: Predicted trajectory
-        python .\visualizer.py --config .\configs\Replica\office0_agents.yaml --agent agent_2 --start_frame 1332
-    """
-    parser = argparse.ArgumentParser(
-        description='Arguments to visualize the SLAM process.'
-    )
-    parser.add_argument('--config', type=str, help='Path to config file.')
-    parser.add_argument('--vis_input_frame',
-                        action='store_true', help='visualize input frames')
-    parser.add_argument('--no_gt_traj',
-                        action='store_true', help='not visualize gt trajectory')
-    parser.add_argument('--agent', default=None, type=str)
-    parser.add_argument('--start_frame', default=0, type=int)
-    args = parser.parse_args()
-    cfg = config.load_config(args.config)
-
-    # get estimated poses
-    if args.agent is not None:
-        ckptsdir = os.path.join(cfg['data']['output'], cfg['data']['exp_name'], args.agent) 
-    else:
-        ckptsdir = os.path.join(cfg['data']['output'], cfg['data']['exp_name']) 
+def get_est_c2w(ckptsdir):
     if os.path.exists(ckptsdir):
         ckpts = [os.path.join(ckptsdir, f)
                  for f in sorted(os.listdir(ckptsdir)) if 'pt' in f] 
@@ -250,43 +256,90 @@ if __name__ == '__main__':
             estimate_c2w_list = list(ckpt['pose'].values())
     estimate_c2w_list = torch.stack(estimate_c2w_list).cpu().numpy()
     num_frames = len(estimate_c2w_list)
+    return estimate_c2w_list, num_frames
+
+
+if __name__ == '__main__':
+    """
+        Black: ground truth 
+        python .\visualizer_agents.py --config .\configs\Replica\office0_agents.yaml --agent 1
+    """
+    parser = argparse.ArgumentParser(
+        description='Arguments to visualize the SLAM process.'
+    )
+    parser.add_argument('--config', type=str, help='Path to config file.')
+    parser.add_argument('--vis_input_frame',
+                        action='store_true', help='visualize input frames')
+    parser.add_argument('--no_gt_traj',
+                        action='store_true', help='not visualize gt trajectory')
+    parser.add_argument('--agent', default=0, type=int, help='which agent mesh to show')  
+    parser.add_argument('--show_last',
+                        action='store_true', help='show the whole trajectories and the last mesh')
+    parser.add_argument('--mesh_only',
+                        action='store_true', help='only show mesh')
+    args = parser.parse_args()
+    cfg = config.load_config(args.config)
+
+    if os.path.exists('camera_params_extrinsic.npy'):
+        print('Get camera parameters for view control')
+        camera_params_extrinsic = np.load('camera_params_extrinsic.npy')
+    else:
+        camera_params_extrinsic = None
+
+    # get estimated poses
+    ckptsdir_list = glob.glob(os.path.join(cfg['data']['output'], cfg['data']['exp_name'], 'agent_*'))
+    estimate_c2w_list_agents = []
+    for dir in ckptsdir_list:
+        estimate_c2w_list, num_frames = get_est_c2w(dir)
+        estimate_c2w_list_agents.append(estimate_c2w_list)
 
     # get gt poses
     dataset = get_dataset(cfg)
     gt_c2w_list = dataset.poses
-    gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()[args.start_frame : args.start_frame+num_frames]
-    frontend = SLAMFrontend(ckptsdir, init_pose=estimate_c2w_list[0], cam_scale=0.3,
-                            near=0, estimate_c2w_list=estimate_c2w_list, gt_c2w_list=gt_c2w_list).start()
-
-
-    for i in tqdm(range(0, len(estimate_c2w_list))):
-        # show every second frame for speed up
-        if args.vis_input_frame and i % 2 == 0:
-            ret = dataset[args.start_frame + i]
-            gt_color = ret['rgb']
-            gt_depth = ret['depth']
-            depth_np = gt_depth.numpy()
-            color_np = (gt_color.numpy()*255).astype(np.uint8)
-            depth_np = depth_np/np.max(depth_np)*255
-            depth_np = np.clip(depth_np, 0, 255).astype(np.uint8)
-            depth_np = cv2.applyColorMap(depth_np, cv2.COLORMAP_JET)
-            color_np = np.clip(color_np, 0, 255)
-            whole = np.concatenate([color_np, depth_np], axis=0)
-            H, W, _ = whole.shape
-            whole = cv2.resize(whole, (W//4, H//4))
-            cv2.imshow(f'Input RGB-D Sequence', whole[:, :, ::-1])
+    gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()
+    frontend = SLAMFrontend(cfg['data']['exp_name'], cam_scale=0.3,
+                            estimate_c2w_list_agents=estimate_c2w_list_agents, gt_c2w_list=gt_c2w_list, 
+                            num_frames=num_frames, camera_params_extrinsic=camera_params_extrinsic).start()
+    
+    start_frame = num_frames - 1 if args.show_last else 0
+    for i in tqdm(range(start_frame, num_frames)): # tqdm progress bar starts with 1
+        # show every fourth frame for speed up
+        if args.vis_input_frame and i % 4 == 0:
+            for agent_id in range(len(estimate_c2w_list_agents)):
+                ret = dataset[agent_id*num_frames + i]
+                gt_color = ret['rgb']
+                gt_depth = ret['depth']
+                depth_np = gt_depth.numpy()
+                color_np = (gt_color.numpy()*255).astype(np.uint8)
+                depth_np = depth_np / np.max(depth_np) * 255
+                depth_np = np.clip(depth_np, 0, 255).astype(np.uint8)
+                depth_np = cv2.applyColorMap(depth_np, cv2.COLORMAP_JET)
+                color_np = np.clip(color_np, 0, 255)
+                whole = np.concatenate([color_np, depth_np], axis=0)
+                H, W, _ = whole.shape
+                whole = cv2.resize(whole, (W//4, H//4))
+                # Use the agent_id to create unique window names
+                window_name = f'Agent {agent_id} Input RGB-D Sequence'
+                # Display the image in a separate window for each agent
+                cv2.imshow(window_name, whole[:, :, ::-1])
             cv2.waitKey(1)
-        time.sleep(0.03)
-        meshfile = f'{ckptsdir}/mesh_track{i}.ply'
+        time.sleep(0.03) # don't delete this, otherwise loop will immediately ends before mesh and trajectories can be updated
+
+        meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}.ply'
         if os.path.isfile(meshfile):
             frontend.update_mesh(meshfile)
-        frontend.update_pose(1, estimate_c2w_list[i], gt=False)
-        if not args.no_gt_traj:
-            frontend.update_pose(1, gt_c2w_list[i], gt=True)
-        # the visualizer might get stucked if update every frame
-        # with a long sequence (10000+ frames)
-        if i % 10 == 0:
-            frontend.update_cam_trajectory(i, gt=False)
-            if not args.no_gt_traj:
-                frontend.update_cam_trajectory(i, gt=True)
+        
+        if args.mesh_only == False:
+            for id in range(len(estimate_c2w_list_agents)):
+                frontend.update_pose(id, estimate_c2w_list_agents[id][i], gt=False)
+                if not args.no_gt_traj:
+                    frontend.update_pose(id, gt_c2w_list[id*num_frames+i], gt=True)
+            # the visualizer might get stucked if update every frame
+            # with a long sequence (10000+ frames)
+            if i % 10 == 0 or (i+1) == num_frames:
+
+                
+                frontend.update_cam_trajectory(i, gt=False)
+                if not args.no_gt_traj:
+                    frontend.update_cam_trajectory(i, gt=True)
 

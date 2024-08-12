@@ -10,7 +10,7 @@ data:
   datadir: data/Replica/office0
   trainskip: 1
   output: output/Replica/office0
-  exp_name: multi_agent_test5
+  exp_name: multi_agent_comTest10
 
 multi_agents:
   num_agents: 3 
