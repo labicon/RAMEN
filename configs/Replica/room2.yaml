@@ -3,9 +3,22 @@ mapping:
   bound: [[-1.0,6.1],[-3.4,1.9],[-3.1,0.8]]
   marching_cubes_bound: [[-0.9,6.0],[-3.3,1.8],[-3.0,0.7]]
 
+mesh:
+  render_color: True
 
 data:
   datadir: data/Replica/room2
   trainskip: 1
   output: output/Replica/room2
-  exp_name: demo
+  exp_name: com20_CADMM
+
+tracking:
+  gt_pose: False
+
+multi_agents:
+  num_agents: 3 
+  edges_list: [[0,1], [0,2], [1,2]]
+  distributed_algorithm: 'CADMM'
+  rho: 0.0001
+  com_every: 20
+  track_uncertainty: True

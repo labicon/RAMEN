@@ -30,7 +30,6 @@ from optimization.utils import at_to_transform_matrix, qt_to_transform_matrix, m
 import sys
 
 
-
 class CoSLAM():
     def __init__(self, config, id, dataset_info):
         self.config = config
@@ -46,10 +45,14 @@ class CoSLAM():
         self.create_optimizer()
 
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
+        self.track_uncertainty = config['multi_agents']['track_uncertainty']
+        if self.track_uncertainty:
+            self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
+
         # initialize dual variable 
         theta_i = p2v(self.model.parameters())
         self.p_i = torch.zeros(theta_i.size()).to(self.device)
-        # a list to hold neighbor model parameters 
+        # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
         # step size in the gradient ascent of the dual variable
         self.rho = config['multi_agents']['rho']
@@ -58,6 +61,7 @@ class CoSLAM():
         self.com_total = 0 # total accumulated communication cost in MB 
 
         self.gt_pose = config['tracking']['gt_pose']
+        print(f'If agent{self.agent_id} uses gt pose: {self.gt_pose}')
 
 
     def seed_everything(self, seed):
@@ -214,8 +218,14 @@ class CoSLAM():
             ret = self.model.forward(rays_o, rays_d, target_s, target_d)
             loss = self.get_loss_from_ret(ret)
             loss.backward()
+
+            if self.track_uncertainty:
+                grid_grad = self.model.embed_fn.params.grad
+                grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
+                self.uncertainty_tensor += grid_has_grad
+
             self.map_optimizer.step()
-        
+
         # First frame will always be a keyframe
         self.keyframeDatabase.add_keyframe(batch, filter_depth=self.config['mapping']['filter_depth'])
         if self.config['mapping']['first_mesh']:
@@ -262,25 +272,58 @@ class CoSLAM():
         return cur_rot, cur_trans, pose_optimizer
  
 
-    def communicate(self, model_j):
-        theta_j = p2v(model_j.parameters())
-        self.neighbors.append(theta_j)
+    def communicate(self,input):
+        model_j = input[0]
+        theta_j = p2v(model_j.parameters()).detach()
+
+        if self.dist_algorithm == 'AUQ_CADMM':
+            uncertainty_j = input[1].detach()
+            self.neighbors.append( [theta_j, uncertainty_j] )
+        elif self.dist_algorithm == 'CADMM':
+            self.neighbors.append( [theta_j] )
 
 
-    def dual_update(self):
-        theta_i = p2v(self.model.parameters()).detach()
-        for theta_j in self.neighbors:
-            theta_j = theta_j.detach()
-            self.p_i += self.rho * (theta_i - theta_j)    
+    def dual_update(self, theta_i_k):
+        for neighbor in self.neighbors:
+            theta_j_k = neighbor[0]
+            self.p_i += self.rho * (theta_i_k - theta_j_k)    
+
+
+    def dual_update_AUQ_CADMM(self, theta_i_k):
+        """
+            @return rho_matrices:
+        """
+        rho_matrices = []
+        uncertainty_i = self.uncertainty_tensor
+        for neighbor in self.neighbors:
+            theta_j_k = neighbor[0]
+            uncertainty_j = neighbor[1]
+            Rho_ij_diag = torch.div( torch.exp(uncertainty_j), torch.exp(uncertainty_i) + torch.exp(uncertainty_j) )
+            Rho_ij = torch.diag(Rho_ij_diag) * self.rho
+            rho_matrices.append(Rho_ij)
+            self.p_i +=  Rho_ij @ (theta_i_k - theta_j_k)    
+
+        return rho_matrices
 
 
     def primal_update(self, theta_i_k, loss):
         theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
-        for theta_j_k in self.neighbors:
-            theta_j_k = theta_j_k.detach()
+        for neighbor in self.neighbors:
+            theta_j_k = neighbor[0]
             difference = self.rho * torch.norm(theta_i - (theta_i_k+theta_j_k)/2)**2
             loss += difference
+        return loss
+    
+
+    def primal_update_AUQ_CADMM(self, theta_i_k, loss, rho_matrices):
+        theta_i = p2v(self.model.parameters())
+        loss = loss + torch.dot(theta_i, self.p_i)
+        for neighbor, Rho_ij in zip(self.neighbors, rho_matrices):
+            theta_j_k = neighbor[0]            
+            difference = theta_i - (theta_i_k+theta_j_k)/2
+            weighted_norm = difference @ Rho_ij @ difference
+            loss += weighted_norm
         return loss
 
 
@@ -323,9 +366,11 @@ class CoSLAM():
         current_rays = torch.cat([batch['direction'], batch['rgb'], batch['depth'][..., None]], dim=-1)
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
 
+        theta_i_k = p2v(self.model.parameters()).detach()
         if dist_algorithm == 'CADMM':
-            self.dual_update()
-            theta_i_k = p2v(self.model.parameters()).detach()
+            self.dual_update(theta_i_k)
+        elif dist_algorithm == 'AUQ_CADMM':
+            rho_matrices = self.dual_update_AUQ_CADMM(theta_i_k)
 
         for i in range(self.config['mapping']['iters']):
 
@@ -354,15 +399,24 @@ class CoSLAM():
 
             ret = self.model.forward(rays_o, rays_d, target_s, target_d)
 
+            self.map_optimizer.zero_grad()
+
             loss = self.get_loss_from_ret(ret, smooth=True)
+            loss.backward(retain_graph=True)
+            if self.track_uncertainty:
+                grid_grad = self.model.embed_fn.params.grad
+                grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
+                self.uncertainty_tensor += grid_has_grad
 
             if dist_algorithm == 'CADMM':
                 loss = self.primal_update(theta_i_k, loss)
+                loss.backward(retain_graph=True)
+            elif dist_algorithm == 'AUQ_CADMM':
+                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, rho_matrices)
+                loss.backward(retain_graph=True)
 
-            self.map_optimizer.zero_grad()
-            loss.backward(retain_graph=True)
             self.map_optimizer.step()
-
+            
             if pose_optimizer is not None and (i + 1) % cfg["mapping"]["pose_accum_step"] == 0:
                 pose_optimizer.step()
                 # get SE3 poses to do forward pass
@@ -539,7 +593,11 @@ class CoSLAM():
                         color_func=color_func, 
                         marching_cube_bound=self.marching_cube_bound, 
                         voxel_size=voxel_size, 
-                        mesh_savepath=mesh_savepath)      
+                        mesh_savepath=mesh_savepath)    
+
+        if self.track_uncertainty == True:
+            uncertainty_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'uncertain_track{}.pt'.format(i))
+            torch.save(self.uncertainty_tensor, uncertainty_savepath)
 
 
     def run(self, i, batch):
@@ -565,6 +623,7 @@ class CoSLAM():
 
         if i % self.config['mesh']['vis']==0:
             self.save_mesh(i, voxel_size=self.config['mesh']['voxel_eval'])
+
 
         if i == (self.dataset_info['num_frames']-1):
             model_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'checkpoint{}.pt'.format(i)) 
@@ -642,8 +701,12 @@ def train_multi_agent(cfg):
                 agent_i.com_perIter = 0
                 for j, edge_attr in nbrs.items():
                     agent_j = G.nodes[j]['agent']
-                    agent_i.communicate(agent_j.model)
-                    model_size = get_model_memory(agent_j.model)
+                    if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
+                        agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor])
+                        model_size = get_model_memory(agent_j.model) # + get_model_memory(agent_j.uncertainty_tensor) #TODO: fix communication
+                    elif cfg['multi_agents']['distributed_algorithm'] == 'CADMM':
+                        agent_i.communicate([agent_j.model])
+                        model_size = get_model_memory(agent_j.model)
                     agent_i.com_perIter += model_size
                     agent_i.com_total += model_size
              
@@ -688,6 +751,10 @@ if __name__ == '__main__':
     cfg = config.load_config(args.config)
     if args.output is not None:
         cfg['data']['output'] = args.output
+
+    if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
+        cfg['multi_agents']['track_uncertainty'] = True
+
 
     print("Saving config and script...")
     save_path = os.path.join(cfg["data"]["output"], cfg['data']['exp_name'])

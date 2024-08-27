@@ -14,6 +14,8 @@ from queue import Empty
 import config
 from datasets.dataset import get_dataset
 import sys 
+import math
+import matplotlib.pyplot as plt
 
 def extrinsic_to_camera_params(extrinsic_matrix):
     # Extract rotation and translation
@@ -65,7 +67,7 @@ def create_camera_actor(i, color_list, is_gt=False, scale=0.005):
     return camera_actor
 
 
-def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic):
+def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic, bounding_box):
 
     draw_trajectory.queue = queue
     draw_trajectory.cameras = {}
@@ -73,6 +75,7 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
     draw_trajectory.ix = 0
     draw_trajectory.warmup = 0
     draw_trajectory.mesh = None
+    draw_trajectory.uncertainty_spheres = None
     draw_trajectory.frame_idx = 0
     draw_trajectory.traj_actor = None
     draw_trajectory.traj_actor_gt = None
@@ -133,20 +136,46 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
                         -np.asarray(draw_trajectory.mesh.triangle_normals))
                     vis.add_geometry(draw_trajectory.mesh)
 
+                elif data[0] == 'uncertainty':
+                    rgb = data[1]
+                    vertices = data[2]
+                    if draw_trajectory.uncertainty_spheres is not None:
+                        vis.remove_geometry(draw_trajectory.uncertainty_spheres)
+                    # draw_trajectory.uncertainty_pd = o3d.geometry.PointCloud()
+                    # draw_trajectory.uncertainty_pd.points = o3d.utility.Vector3dVector(vertices)
+                    # draw_trajectory.uncertainty_pd.colors = o3d.utility.Vector3dVector(rgb)
+                    # vis.add_geometry(draw_trajectory.uncertainty_pd)
+
+                    def create_sphere_mesh(radius, center, rgb):
+                        sphere = o3d.geometry.TriangleMesh.create_sphere(radius)
+                        sphere.translate(center)
+                        sphere.paint_uniform_color(rgb)
+                        return sphere
+                    
+                    def combine_meshes(meshes):
+                        """Combine multiple meshes into one mesh."""
+                        combined_mesh = o3d.geometry.TriangleMesh()
+                        for mesh in meshes:
+                            combined_mesh += mesh
+                        return combined_mesh
+
+                    radius = 0.025
+                    spheres = [create_sphere_mesh(radius, vertices[i], rgb[i]) for i in range(rgb.shape[0])]
+                    draw_trajectory.uncertainty_spheres = combine_meshes(spheres) # add one mesh to visualizer in one go is much faster than add these spheres one by one 
+                    vis.add_geometry(draw_trajectory.uncertainty_spheres)
 
                 elif data[0] == 'traj':
                     i, is_gt = data[1:]
-
                     if is_gt:
                         if draw_trajectory.traj_actor_gt is not None:
                             vis.remove_geometry(draw_trajectory.traj_actor_gt)
-                            tmp = draw_trajectory.traj_actor_gt
-                            del tmp
+                            # tmp = draw_trajectory.traj_actor_gt
+                            # del tmp
                     else:
                         if draw_trajectory.traj_actor is not None:
                             vis.remove_geometry(draw_trajectory.traj_actor)
-                            tmp = draw_trajectory.traj_actor
-                            del tmp
+                            # tmp = draw_trajectory.traj_actor
+                            # del tmp
 
                     for agent_id, agent_est_c2w in enumerate(estimate_c2w_list_agents):
                         color = (0.0, 0.0, 0.0) if is_gt else draw_trajectory.color_list[agent_id]
@@ -191,6 +220,11 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
     vis.get_render_option().mesh_show_back_face = False
     vis.get_render_option().show_coordinate_frame = True #red-x, green-y, blue-z 
 
+    # add bounding box 
+    bbox = o3d.geometry.AxisAlignedBoundingBox(min_bound=bounding_box[:, 0], max_bound=bounding_box[:, 1])
+    bbox.color = (1, 0, 0)  # Red color
+    vis.add_geometry(bbox)
+
     # set up view control 
     ctr = vis.get_view_control()
     if camera_params_extrinsic is not None:
@@ -214,11 +248,11 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
 class SLAMFrontend:
 
     def __init__(self, output, cam_scale=1,
-                 estimate_c2w_list_agents=None, gt_c2w_list=None, num_frames=0, camera_params_extrinsic=None):
+                 estimate_c2w_list_agents=None, gt_c2w_list=None, num_frames=0, camera_params_extrinsic=None, bounding_box=None):
         self.queue = Queue()
         self.p = Process(target=draw_trajectory, args=(
             self.queue, output, cam_scale, 
-            estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic))
+            estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic, bounding_box))
 
     def update_pose(self, index, pose, gt=False):
         if isinstance(pose, torch.Tensor):
@@ -229,6 +263,9 @@ class SLAMFrontend:
         
     def update_mesh(self, path):
         self.queue.put_nowait(('mesh', path))
+
+    def update_uncertainty(self, rgb, vertices):
+        self.queue.put_nowait(('uncertainty', rgb, vertices))
 
     def update_cam_trajectory(self, c2w_list, gt):
         self.queue.put_nowait(('traj', c2w_list, gt))
@@ -247,7 +284,7 @@ class SLAMFrontend:
 def get_est_c2w(ckptsdir):
     if os.path.exists(ckptsdir):
         ckpts = [os.path.join(ckptsdir, f)
-                 for f in sorted(os.listdir(ckptsdir)) if 'pt' in f] 
+                 for f in sorted(os.listdir(ckptsdir)) if 'checkpoint' in f] 
         if len(ckpts) > 0:
             ckpt_path = ckpts[-1]
             print('Get ckpt :', ckpt_path)
@@ -259,10 +296,62 @@ def get_est_c2w(ckptsdir):
     return estimate_c2w_list, num_frames
 
 
+def get_grid_resolution(cfg):
+    bounding_box = np.asarray(cfg['mapping']['bound'])
+    dim_max = (bounding_box[:,1] - bounding_box[:,0]).max()
+    N_max = int(dim_max / cfg['grid']['voxel_sdf'])
+
+    F = 2 
+    d = 3 
+    T = 2**cfg['grid']['hash_size']
+    N_min = 16 
+    L = 16
+    b = np.exp2(np.log2(N_max  / N_min) / (L - 1))
+
+    def next_multiple(val, divisor):
+        div_round_up = (val+divisor-1) // divisor 
+        return div_round_up * divisor
+
+    params_in_level_list = []
+    N_l_list = []
+    for l in range(L):
+        N_l = math.ceil(b**l * N_min - 1) + 1 # this is different from how N_l is calculated in the paper
+        N_l_list.append(N_l)
+
+        params_in_level = N_l**d
+        params_in_level = next_multiple(params_in_level, 8) # to make sure memory accesses will be aligned, this will lead to non-integer cube root 
+        params_in_level = min(params_in_level, T) 
+        params_in_level_list.append(params_in_level*F)
+
+    return N_l_list[0], params_in_level_list[0]
+
+
+def process_uncertainty_file(uncertaintyFile, cfg, N_l, params_in_level):
+    """
+        @return : rgb, vertices
+    """
+    # get color 
+    uncertainty_tensor = torch.load(uncertaintyFile)[:params_in_level]
+    uncertainty_tensor = uncertainty_tensor.view(-1,2).sum(-1) 
+    uncertainty_tensor /= torch.max(uncertainty_tensor) # normalize
+    rgb = plt.cm.cool(uncertainty_tensor.cpu().numpy())[:,:3]
+
+    # get grid 
+    bbox = np.asarray(cfg['mapping']['bound'])
+    x = np.linspace( bbox[0,0], bbox[0,1], num=N_l)
+    y = np.linspace( bbox[1,0], bbox[1,1], num=N_l)
+    z = np.linspace( bbox[2,0], bbox[2,1], num=N_l)
+    grid = np.meshgrid(z, y, x, indexing='ij')
+    vertices = np.stack(grid, axis=-1).reshape(-1, 3)[:,::-1] # so that the 2nd dimension order is (x,y,z)
+
+    return rgb, vertices
+
+
 if __name__ == '__main__':
     """
         Black: ground truth 
-        python .\visualizer_agents.py --config .\configs\Replica\office0_agents.yaml --agent 1
+        python -W ignore .\visualizer_agents.py --config .\configs\Replica\office0_agents.yaml --agent 1
+        -W ignore for ignoring warning
     """
     parser = argparse.ArgumentParser(
         description='Arguments to visualize the SLAM process.'
@@ -277,6 +366,8 @@ if __name__ == '__main__':
                         action='store_true', help='show the whole trajectories and the last mesh')
     parser.add_argument('--mesh_only',
                         action='store_true', help='only show mesh')
+    parser.add_argument('--show_uncertainty',
+                        action='store_true', help='visualize grid uncertainty')
     args = parser.parse_args()
     cfg = config.load_config(args.config)
 
@@ -288,6 +379,7 @@ if __name__ == '__main__':
 
     # get estimated poses
     ckptsdir_list = glob.glob(os.path.join(cfg['data']['output'], cfg['data']['exp_name'], 'agent_*'))
+    ckptsdir_list = sorted(ckptsdir_list, key=lambda x: int(x.split('_')[-1]))
     estimate_c2w_list_agents = []
     for dir in ckptsdir_list:
         estimate_c2w_list, num_frames = get_est_c2w(dir)
@@ -299,8 +391,13 @@ if __name__ == '__main__':
     gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()
     frontend = SLAMFrontend(cfg['data']['exp_name'], cam_scale=0.3,
                             estimate_c2w_list_agents=estimate_c2w_list_agents, gt_c2w_list=gt_c2w_list, 
-                            num_frames=num_frames, camera_params_extrinsic=camera_params_extrinsic).start()
+                            num_frames=num_frames, camera_params_extrinsic=camera_params_extrinsic, bounding_box=np.asarray(cfg['mapping']['bound'])).start()
     
+    # prepare for uncertainty visualization 
+    if args.show_uncertainty:
+        N_l, params_in_level = get_grid_resolution(cfg) #TODO: for now we only visualize level 0 grid
+        print(f'N_l = {N_l}, params_in_level = {params_in_level}')
+
     start_frame = num_frames - 1 if args.show_last else 0
     for i in tqdm(range(start_frame, num_frames)): # tqdm progress bar starts with 1
         # show every fourth frame for speed up
@@ -329,6 +426,12 @@ if __name__ == '__main__':
         if os.path.isfile(meshfile):
             frontend.update_mesh(meshfile)
         
+        if args.show_uncertainty:
+            uncertaintyFile = f'{ckptsdir_list[args.agent]}/uncertain_track{i}.pt'
+            if os.path.isfile(uncertaintyFile):
+                rgb, vertices = process_uncertainty_file(uncertaintyFile, cfg, N_l, params_in_level)
+                frontend.update_uncertainty(rgb, vertices)
+
         if args.mesh_only == False:
             for id in range(len(estimate_c2w_list_agents)):
                 frontend.update_pose(id, estimate_c2w_list_agents[id][i], gt=False)
@@ -336,9 +439,7 @@ if __name__ == '__main__':
                     frontend.update_pose(id, gt_c2w_list[id*num_frames+i], gt=True)
             # the visualizer might get stucked if update every frame
             # with a long sequence (10000+ frames)
-            if i % 10 == 0 or (i+1) == num_frames:
-
-                
+            if (i+1) % 10 == 0 or (i+1) == num_frames:
                 frontend.update_cam_trajectory(i, gt=False)
                 if not args.no_gt_traj:
                     frontend.update_cam_trajectory(i, gt=True)
