@@ -7,20 +7,18 @@ mesh:
   render_color: True
   
 data:
-  #datadir: C:\Users\hongr\Documents\uiuc\Thesis\codes\git\multi_agent_SLAM\multi_agent_SLAM\Datasets\Apartment
   datadir: ./data/Apartment
   trainskip: 1
   output: output/Apartment
-  exp_name: agents_uncertainTest
-  #exp_name: agents_rho0
+  exp_name: three_agents
 
 tracking:
-  gt_pose: False
+  gt_pose: True
 
 multi_agents:
   num_agents: 3 
   edges_list: [[0,1], [0,2], [1,2]]
   distributed_algorithm: 'CADMM'
   rho: 0.0001
-  com_every: 10
-  track_uncertainty: True
+  com_every: 5
+  track_uncertainty: False

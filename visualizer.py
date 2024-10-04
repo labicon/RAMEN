@@ -67,7 +67,9 @@ def create_camera_actor(i, color_list, is_gt=False, scale=0.005):
     return camera_actor
 
 
-def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic, bounding_box):
+def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, 
+                    gt_c2w_list, num_frames, camera_params_extrinsic, 
+                    bounding_box, agent_id, save_rendering):
 
     draw_trajectory.queue = queue
     draw_trajectory.cameras = {}
@@ -92,6 +94,10 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
                                         (1.0, 0.412, 0.706) # Hot Pink
                                     ]
     draw_trajectory.num_frames = num_frames
+
+    if save_rendering:
+        os.system(f"rm -rf {output}/tmp_rendering")
+    
     def animation_callback(vis):
         cam = vis.get_view_control().convert_to_pinhole_camera_parameters()
         while True:
@@ -211,11 +217,17 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
 
         vis.poll_events()
         vis.update_renderer()
+        if save_rendering:
+            # save the renderings, useful when making a video
+            draw_trajectory.frame_idx += 1
+            os.makedirs(f'{output}/tmp_rendering', exist_ok=True)
+            vis.capture_screen_image(
+                f'{output}/tmp_rendering/{draw_trajectory.frame_idx:06d}.jpg')
 
     vis = o3d.visualization.Visualizer()
 
     vis.register_animation_callback(animation_callback)
-    vis.create_window(window_name=output, height=1080, width=1920)
+    vis.create_window(window_name= f'{output}-agent{agent_id}', height=1080, width=1920)
     vis.get_render_option().point_size = 4
     vis.get_render_option().mesh_show_back_face = False
     vis.get_render_option().show_coordinate_frame = True #red-x, green-y, blue-z 
@@ -248,11 +260,11 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents, gt_c2w_l
 class SLAMFrontend:
 
     def __init__(self, output, cam_scale=1,
-                 estimate_c2w_list_agents=None, gt_c2w_list=None, num_frames=0, camera_params_extrinsic=None, bounding_box=None):
+                 estimate_c2w_list_agents=None, gt_c2w_list=None, num_frames=0, camera_params_extrinsic=None, bounding_box=None, agent_id=0, save_rendering=False):
         self.queue = Queue()
         self.p = Process(target=draw_trajectory, args=(
             self.queue, output, cam_scale, 
-            estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic, bounding_box))
+            estimate_c2w_list_agents, gt_c2w_list, num_frames, camera_params_extrinsic, bounding_box, agent_id, save_rendering))
 
     def update_pose(self, index, pose, gt=False):
         if isinstance(pose, torch.Tensor):
@@ -326,15 +338,21 @@ def get_grid_resolution(cfg):
     return N_l_list[0], params_in_level_list[0]
 
 
-def process_uncertainty_file(uncertaintyFile, cfg, N_l, params_in_level):
+def process_uncertainty_file(file_path, cfg, N_l, params_in_level, vis_type, neighbor=None):
     """
         @return : rgb, vertices
     """
     # get color 
-    uncertainty_tensor = torch.load(uncertaintyFile)[:params_in_level]
-    uncertainty_tensor = uncertainty_tensor.view(-1,2).sum(-1) 
-    uncertainty_tensor /= torch.max(uncertainty_tensor) # normalize
-    rgb = plt.cm.cool(uncertainty_tensor.cpu().numpy())[:,:3]
+    if vis_type == 'uncertainty':
+        uncertainty_tensor = torch.load(file_path)[:params_in_level]
+        uncertainty_tensor = uncertainty_tensor.view(-1,2).sum(-1) 
+        uncertainty_tensor /= torch.max(uncertainty_tensor) # normalize
+        rgb = plt.cm.cool(uncertainty_tensor.cpu().numpy())[:,:3]
+    elif vis_type =='Rho':
+        Rho_tensor = torch.load(file_path)[neighbor][:params_in_level]
+        Rho_tensor = Rho_tensor.view(-1,2).sum(-1)
+        Rho_tensor /= torch.max(Rho_tensor)
+        rgb = plt.cm.hot(Rho_tensor.cpu().numpy())[:,:3]
 
     # get grid 
     bbox = np.asarray(cfg['mapping']['bound'])
@@ -368,6 +386,10 @@ if __name__ == '__main__':
                         action='store_true', help='only show mesh')
     parser.add_argument('--show_uncertainty',
                         action='store_true', help='visualize grid uncertainty')
+    parser.add_argument('--CADMM_Rho', default=-1, type=int, help='which CADMM weight to show')  
+    parser.add_argument('--save_rendering', action='store_true', help='save rendering video to `vis.mp4` in output folder ')
+
+
     args = parser.parse_args()
     cfg = config.load_config(args.config)
 
@@ -391,10 +413,11 @@ if __name__ == '__main__':
     gt_c2w_list = torch.stack(gt_c2w_list).cpu().numpy()
     frontend = SLAMFrontend(cfg['data']['exp_name'], cam_scale=0.3,
                             estimate_c2w_list_agents=estimate_c2w_list_agents, gt_c2w_list=gt_c2w_list, 
-                            num_frames=num_frames, camera_params_extrinsic=camera_params_extrinsic, bounding_box=np.asarray(cfg['mapping']['bound'])).start()
+                            num_frames=num_frames, camera_params_extrinsic=camera_params_extrinsic, bounding_box=np.asarray(cfg['mapping']['bound']), agent_id = args.agent,
+                            save_rendering=args.save_rendering).start()
     
-    # prepare for uncertainty visualization 
-    if args.show_uncertainty:
+    # prepare for uncertainty visuasave_renderinglization 
+    if args.show_uncertainty or args.CADMM_Rho != -1:
         N_l, params_in_level = get_grid_resolution(cfg) #TODO: for now we only visualize level 0 grid
         print(f'N_l = {N_l}, params_in_level = {params_in_level}')
 
@@ -426,10 +449,16 @@ if __name__ == '__main__':
         if os.path.isfile(meshfile):
             frontend.update_mesh(meshfile)
         
-        if args.show_uncertainty:
+        if args.CADMM_Rho != -1:
+            RhoFile = f'{ckptsdir_list[args.agent]}/CADMM_Rho{i}.pt'
+            if os.path.isfile(RhoFile):
+                rgb, vertices = process_uncertainty_file(RhoFile, cfg, N_l, params_in_level, vis_type='Rho', neighbor=args.CADMM_Rho)
+                frontend.update_uncertainty(rgb, vertices)
+            
+        elif args.show_uncertainty:
             uncertaintyFile = f'{ckptsdir_list[args.agent]}/uncertain_track{i}.pt'
             if os.path.isfile(uncertaintyFile):
-                rgb, vertices = process_uncertainty_file(uncertaintyFile, cfg, N_l, params_in_level)
+                rgb, vertices = process_uncertainty_file(uncertaintyFile, cfg, N_l, params_in_level, vis_type='uncertainty')
                 frontend.update_uncertainty(rgb, vertices)
 
         if args.mesh_only == False:
@@ -443,4 +472,9 @@ if __name__ == '__main__':
                 frontend.update_cam_trajectory(i, gt=False)
                 if not args.no_gt_traj:
                     frontend.update_cam_trajectory(i, gt=True)
+
+    if args.save_rendering:
+        time.sleep(15)
+        os.system(
+            f"ffmpeg -f image2 -r 30 -pattern_type glob -i '{cfg['data']['exp_name']}/tmp_rendering/*.jpg' -y {cfg['data']['exp_name']}/vis.mp4")
 

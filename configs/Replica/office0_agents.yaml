@@ -5,16 +5,24 @@ mapping:
 
 mesh: 
   vis: 100  
+  render_color: True
 
 data:
   datadir: data/Replica/office0
   trainskip: 1
   output: output/Replica/office0
-  exp_name: multi_agent_comTest10
+  exp_name: centralized #three_agents
+
+tracking:
+  gt_pose: True
 
 multi_agents:
   num_agents: 3 
   edges_list: [[0,1], [0,2], [1,2]]
+  # num_agents: 1
+  # edges_list: []
   distributed_algorithm: 'CADMM'
-  rho: 0
-  com_every: 10
+  rho: 0.0001
+  com_every: 5
+  track_uncertainty: False
+

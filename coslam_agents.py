@@ -278,7 +278,13 @@ class CoSLAM():
 
         if self.dist_algorithm == 'AUQ_CADMM':
             uncertainty_j = input[1].detach()
-            self.neighbors.append( [theta_j, uncertainty_j] )
+            uncertainty_i = self.uncertainty_tensor.detach()
+            diff = torch.clamp(uncertainty_i - uncertainty_j, max=100)
+            Rho_ij_diag = torch.div( 1, 1 + torch.exp(diff) ) 
+            padding_size = theta_j.size(0) - Rho_ij_diag.size(0)
+            Rho_ij_diag = torch.nn.functional.pad(Rho_ij_diag, (0,padding_size), "constant", 1) * self.rho
+            self.neighbors.append( [theta_j, Rho_ij_diag] )
+
         elif self.dist_algorithm == 'CADMM':
             self.neighbors.append( [theta_j] )
 
@@ -290,20 +296,10 @@ class CoSLAM():
 
 
     def dual_update_AUQ_CADMM(self, theta_i_k):
-        """
-            @return rho_matrices:
-        """
-        rho_matrices = []
-        uncertainty_i = self.uncertainty_tensor
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
-            uncertainty_j = neighbor[1]
-            Rho_ij_diag = torch.div( torch.exp(uncertainty_j), torch.exp(uncertainty_i) + torch.exp(uncertainty_j) )
-            Rho_ij = torch.diag(Rho_ij_diag) * self.rho
-            rho_matrices.append(Rho_ij)
-            self.p_i +=  Rho_ij @ (theta_i_k - theta_j_k)    
-
-        return rho_matrices
+            Rho_ij_diag = neighbor[1]
+            self.p_i +=  Rho_ij_diag * (theta_i_k - theta_j_k)    
 
 
     def primal_update(self, theta_i_k, loss):
@@ -316,13 +312,14 @@ class CoSLAM():
         return loss
     
 
-    def primal_update_AUQ_CADMM(self, theta_i_k, loss, rho_matrices):
+    def primal_update_AUQ_CADMM(self, theta_i_k, loss):
         theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
-        for neighbor, Rho_ij in zip(self.neighbors, rho_matrices):
-            theta_j_k = neighbor[0]            
+        for neighbor in self.neighbors:
+            theta_j_k = neighbor[0]     
+            Rho_ij_diag = neighbor[1]
             difference = theta_i - (theta_i_k+theta_j_k)/2
-            weighted_norm = difference @ Rho_ij @ difference
+            weighted_norm = torch.dot( (difference * Rho_ij_diag), difference)
             loss += weighted_norm
         return loss
 
@@ -358,6 +355,9 @@ class CoSLAM():
             pose_optim = self.matrix_from_tensor(cur_rot, cur_trans).to(self.device)
             poses_all = torch.cat([poses_fixed, pose_optim], dim=0)
         
+        if self.gt_pose:
+            pose_optimizer = None
+
         # Set up optimizer
         self.map_optimizer.zero_grad()
         if pose_optimizer is not None:
@@ -370,7 +370,7 @@ class CoSLAM():
         if dist_algorithm == 'CADMM':
             self.dual_update(theta_i_k)
         elif dist_algorithm == 'AUQ_CADMM':
-            rho_matrices = self.dual_update_AUQ_CADMM(theta_i_k)
+            self.dual_update_AUQ_CADMM(theta_i_k)
 
         for i in range(self.config['mapping']['iters']):
 
@@ -412,7 +412,7 @@ class CoSLAM():
                 loss = self.primal_update(theta_i_k, loss)
                 loss.backward(retain_graph=True)
             elif dist_algorithm == 'AUQ_CADMM':
-                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, rho_matrices)
+                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss)
                 loss.backward(retain_graph=True)
 
             self.map_optimizer.step()
@@ -598,6 +598,11 @@ class CoSLAM():
         if self.track_uncertainty == True:
             uncertainty_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'uncertain_track{}.pt'.format(i))
             torch.save(self.uncertainty_tensor, uncertainty_savepath)
+
+        if self.dist_algorithm == 'AUQ_CADMM' and len(self.neighbors) > 0:
+            Rho_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'CADMM_Rho{}.pt'.format(i))
+            Rho = [item[1] for item in self.neighbors]
+            torch.save(Rho, Rho_savepath)
 
 
     def run(self, i, batch):

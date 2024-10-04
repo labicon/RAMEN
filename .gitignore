@@ -174,3 +174,5 @@ data/
 
 # for local test code 
 test.ipynb
+
+*.mp4
