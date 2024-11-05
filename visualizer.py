@@ -81,18 +81,28 @@ def draw_trajectory(queue, output, cam_scale, estimate_c2w_list_agents,
     draw_trajectory.frame_idx = 0
     draw_trajectory.traj_actor = None
     draw_trajectory.traj_actor_gt = None
-    draw_trajectory.color_list =    [
-                                        (1.0, 0.0, 0.0),   # Red
-                                        (0.0, 1.0, 0.0),   # Green
-                                        (0.0, 0.0, 1.0),   # Blue
-                                        (1.0, 0.647, 0.0), # Orange
-                                        (1.0, 1.0, 0.0),   # Yellow
-                                        (0.502, 0.0, 0.502), # Purple
-                                        (0.0, 1.0, 1.0),   # Cyan
-                                        (1.0, 0.753, 0.796), # Pink
-                                        (0.0, 0.502, 0.0), # Dark Green
-                                        (1.0, 0.412, 0.706) # Hot Pink
-                                    ]
+    draw_trajectory.color_list = [
+                                    (1.0, 0.0, 0.0),   # Red
+                                    (0.0, 1.0, 0.0),   # Green
+                                    (0.0, 0.0, 1.0),   # Blue
+                                    (1.0, 0.647, 0.0), # Orange
+                                    (1.0, 1.0, 0.0),   # Yellow
+                                    (0.502, 0.0, 0.502), # Purple
+                                    (0.0, 1.0, 1.0),   # Cyan
+                                    (1.0, 0.753, 0.796), # Pink
+                                    (0.0, 0.502, 0.0), # Dark Green
+                                    (1.0, 0.412, 0.706), # Hot Pink
+                                    (0.0, 0.0, 0.502),   # Navy Blue
+                                    (0.502, 0.502, 0.0), # Olive Green
+                                    (0.502, 0.0, 0.0),   # Maroon
+                                    (1.0, 0.843, 0.0), # Gold
+                                    (0.753, 0.753, 0.753), # Silver
+                                    (0.0, 0.753, 1.0),  # Deep Sky Blue 
+                                    (1.0, 0.0, 1.0),   # Magenta
+                                    (0.855, 0.439, 0.839), # Orchid
+                                    (0.498, 1.0, 0.831), # Aquamarine
+                                    (0.980, 0.502, 0.447)  # Salmon
+                                ]
     draw_trajectory.num_frames = num_frames
 
     if save_rendering:

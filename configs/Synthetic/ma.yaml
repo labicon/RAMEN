@@ -2,10 +2,32 @@ inherit_from: configs/Synthetic/synthetic.yaml
 mapping:
   bound: [[-1.5, 2.2],[-0.3, 2.2],[-2.3, 1.9]]
   marching_cubes_bound: [[-1.5, 2.2],[-0.3, 2.2],[-2.3, 1.9]]
-  
+  keyframe_every: 5
+  map_every: 5
+
+
+mesh:
+  render_color: True
+  vis: 100  
+
 
 data:
   datadir: data/neural_rgbd_data/morning_apartment
   trainskip: 1
   output: output/Synthetic/ma
-  exp_name: demo
+  #exp_name: ma_10agents_AUQCADMM
+  exp_name: ma_centralized
+
+
+tracking:
+  gt_pose: True
+  #iter: 20
+
+
+multi_agents:
+  num_agents: 10
+  complete_graph: True
+  edges_for_dropout: []
+  distributed_algorithm: 'AUQ_CADMM'
+  rho: 0.0001
+  track_uncertainty: False

@@ -45,12 +45,17 @@ class CoSLAM():
         self.create_optimizer()
 
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
+        self.fix_decoder = config['multi_agents']['fix_decoder']
         self.track_uncertainty = config['multi_agents']['track_uncertainty']
         if self.track_uncertainty:
             self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
+        self.W_i = torch.zeros(self.model.embed_fn.params.size()).to(self.device) 
 
         # initialize dual variable 
-        theta_i = p2v(self.model.parameters())
+        if self.fix_decoder:
+            theta_i = p2v(self.model.embed_fn.parameters())
+        else:
+            theta_i = p2v(self.model.parameters())
         self.p_i = torch.zeros(theta_i.size()).to(self.device)
         # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
@@ -126,6 +131,14 @@ class CoSLAM():
 
     def load(self, load_path):
         self.model.load_state_dict(torch.load(load_path))
+
+
+    def load_decoder(self, load_path):
+        dict = torch.load(load_path, weights_only=True)
+        model_dict = dict['model']
+        del model_dict['embedpos_fn.params']
+        del model_dict['embed_fn.params']
+        self.model.load_state_dict(model_dict, strict=False) # load from a partial state_dict missing some keys, use strict=False
     
 
     def save_ckpt(self, save_path):
@@ -271,6 +284,18 @@ class CoSLAM():
         
         return cur_rot, cur_trans, pose_optimizer
  
+    
+    def scaling_AUQ_CADMM(self, k, uncertainty):
+        a_1 = self.rho
+        b_1 = self.rho*100
+        gamma = 1/(k+1)**2 * (b_1/a_1) + 1 - 1/(k+1)**2
+        b_new = a_1 * gamma
+
+        p = (b_new-a_1)/(torch.max(uncertainty) - torch.min(uncertainty)) 
+        q = a_1 - p*torch.min(uncertainty)
+        uncertainty_scaled = p*uncertainty + q
+        return uncertainty_scaled
+
 
     def communicate(self,input):
         model_j = input[0]
@@ -278,12 +303,11 @@ class CoSLAM():
 
         if self.dist_algorithm == 'AUQ_CADMM':
             uncertainty_j = input[1].detach()
-            uncertainty_i = self.uncertainty_tensor.detach()
-            diff = torch.clamp(uncertainty_i - uncertainty_j, max=100)
-            Rho_ij_diag = torch.div( 1, 1 + torch.exp(diff) ) 
-            padding_size = theta_j.size(0) - Rho_ij_diag.size(0)
-            Rho_ij_diag = torch.nn.functional.pad(Rho_ij_diag, (0,padding_size), "constant", 1) * self.rho
-            self.neighbors.append( [theta_j, Rho_ij_diag] )
+            step = input[2]
+            uncertainty_j = self.scaling_AUQ_CADMM(k=step, uncertainty=uncertainty_j)
+            padding_size = theta_j.size(0) - uncertainty_j.size(0)
+            W_j = torch.nn.functional.pad(uncertainty_j, (0,padding_size), "constant", self.rho) 
+            self.neighbors.append( [theta_j, W_j] )
 
         elif self.dist_algorithm == 'CADMM':
             self.neighbors.append( [theta_j] )
@@ -295,15 +319,18 @@ class CoSLAM():
             self.p_i += self.rho * (theta_i_k - theta_j_k)    
 
 
-    def dual_update_AUQ_CADMM(self, theta_i_k):
+    def dual_update_AUQ_CADMM(self, theta_i_k, W_i):
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
-            Rho_ij_diag = neighbor[1]
-            self.p_i +=  Rho_ij_diag * (theta_i_k - theta_j_k)    
+            W_j = neighbor[1]
+            self.p_i +=  2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, W_i + W_j)
 
 
     def primal_update(self, theta_i_k, loss):
-        theta_i = p2v(self.model.parameters())
+        if self.fix_decoder:
+            theta_i = p2v(self.model.embed_fn.parameters())
+        else:
+            theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
@@ -312,14 +339,17 @@ class CoSLAM():
         return loss
     
 
-    def primal_update_AUQ_CADMM(self, theta_i_k, loss):
-        theta_i = p2v(self.model.parameters())
+    def primal_update_AUQ_CADMM(self, theta_i_k, loss, W_i):
+        if self.fix_decoder:
+            theta_i = p2v(self.model.embed_fn.parameters())
+        else:
+            theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]     
-            Rho_ij_diag = neighbor[1]
-            difference = theta_i - (theta_i_k+theta_j_k)/2
-            weighted_norm = torch.dot( (difference * Rho_ij_diag), difference)
+            W_j = neighbor[1]
+            difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
+            weighted_norm = torch.dot(difference*W_i, difference)
             loss += weighted_norm
         return loss
 
@@ -366,11 +396,19 @@ class CoSLAM():
         current_rays = torch.cat([batch['direction'], batch['rgb'], batch['depth'][..., None]], dim=-1)
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
 
-        theta_i_k = p2v(self.model.parameters()).detach()
+
+        if self.fix_decoder:
+            theta_i_k = p2v(self.model.embed_fn.parameters()).detach()
+        else:
+            theta_i_k = p2v(self.model.parameters()).detach()
+
         if dist_algorithm == 'CADMM':
             self.dual_update(theta_i_k)
         elif dist_algorithm == 'AUQ_CADMM':
-            self.dual_update_AUQ_CADMM(theta_i_k)
+            uncertainty_i = self.scaling_AUQ_CADMM(k=cur_frame_id, uncertainty=self.uncertainty_tensor)
+            padding_size = theta_i_k.size(0) - uncertainty_i.size(0)
+            W_i = torch.nn.functional.pad(uncertainty_i, (0,padding_size), "constant", self.rho) 
+            self.dual_update_AUQ_CADMM(theta_i_k, W_i)
 
         for i in range(self.config['mapping']['iters']):
 
@@ -412,7 +450,7 @@ class CoSLAM():
                 loss = self.primal_update(theta_i_k, loss)
                 loss.backward(retain_graph=True)
             elif dist_algorithm == 'AUQ_CADMM':
-                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss)
+                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, W_i)
                 loss.backward(retain_graph=True)
 
             self.map_optimizer.step()
@@ -571,10 +609,13 @@ class CoSLAM():
         '''
         Create optimizer for mapping
         '''
-        # Optimizer for BA
-        trainable_parameters = [{'params': self.model.decoder.parameters(), 'weight_decay': 1e-6, 'lr': self.config['mapping']['lr_decoder']},
-                                {'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
-    
+        # # Optimizer for BA
+        # trainable_parameters = [{'params': self.model.decoder.parameters(), 'weight_decay': 1e-6, 'lr': self.config['mapping']['lr_decoder']},
+        #                         {'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
+        
+        #TODO: not training decoder now
+        trainable_parameters = [{'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
+
         if not self.config['grid']['oneGrid']:
             trainable_parameters.append({'params': self.model.embed_fn_color.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed_color']})
         
@@ -643,20 +684,28 @@ def create_agent_graph(cfg, dataset):
         @return G: created graph
         @return frames_per_agent:
     """
-    G = nx.Graph()
-    node_list = []
-
     num_agents = cfg['multi_agents']['num_agents']
     frames_per_agent = len(dataset) // num_agents
     dataset_info = {'num_frames':frames_per_agent, 'num_rays_to_save':dataset.num_rays_to_save, 'H':dataset.H, 'W':dataset.W }
-
-    for i in range(num_agents):
-        print(f'\nCreating agnet {i}')
-        agent_i = CoSLAM(cfg, i, dataset_info)
-        node_list.append( [ i, {"agent": agent_i} ] )
-
-    G.add_nodes_from(node_list) 
-    G.add_edges_from(cfg['multi_agents']['edges_list'])
+    
+    if cfg['multi_agents']['complete_graph']:
+        G = nx.complete_graph(num_agents)
+        for i in range(num_agents):
+            print(f'\nCreating agnet {i}')
+            agent_i = CoSLAM(cfg, i, dataset_info)
+            agent_i.load_decoder(load_path=cfg['data']['load_path'])
+            attrs = {i:{"agent": agent_i}}
+            nx.set_node_attributes(G, attrs)
+        nx.set_edge_attributes(G, 1, "weight")
+    else:
+        G = nx.Graph()
+        node_list = []
+        for i in range(num_agents):
+            print(f'\nCreating agnet {i}')
+            agent_i = CoSLAM(cfg, i, dataset_info)
+            node_list.append( [ i, {"agent": agent_i} ] )
+        G.add_nodes_from(node_list) 
+        G.add_edges_from(cfg['multi_agents']['edges_list'], weight=1)
 
     # plot graph
     nx.draw(G, with_labels=True, font_weight='bold')
@@ -695,25 +744,42 @@ def train_multi_agent(cfg):
     G, frames_per_agent = create_agent_graph(cfg, dataset)
 
     get_data_memory(dataset, cfg, frames_per_agent)
+    
+    edges_for_dropout = cfg['multi_agents']['edges_for_dropout']
+    com_history = {}
 
     for step in trange(0, frames_per_agent, smoothing=0):
+
         # commnuication
-        if step % cfg['multi_agents']['com_every'] == 0:
+        if step % cfg['mapping']['map_every'] == 0:
+
+            # communication dropout
+            for i, j, p in edges_for_dropout:
+                G.edges[i,j]['weight'] = random.choices([0, 1], weights=[p, 1-p])[0] # 0 forcom dropout
+
             for i, nbrs in G.adj.items():
                 print(f'\nAgent {i} Communicating')
                 agent_i = G.nodes[i]['agent']
                 agent_i.neighbors = [] # clear communication buffer, only save the latest weights
                 agent_i.com_perIter = 0
                 for j, edge_attr in nbrs.items():
-                    agent_j = G.nodes[j]['agent']
-                    if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
-                        agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor])
-                        model_size = get_model_memory(agent_j.model) # + get_model_memory(agent_j.uncertainty_tensor) #TODO: fix communication
-                    elif cfg['multi_agents']['distributed_algorithm'] == 'CADMM':
-                        agent_i.communicate([agent_j.model])
-                        model_size = get_model_memory(agent_j.model)
-                    agent_i.com_perIter += model_size
-                    agent_i.com_total += model_size
+                    # save com history 
+                    if i < j: # only save (i,j), don't save (j,i)
+                        edge = (i, j) 
+                        if edge not in com_history:
+                            com_history[edge] = []
+                        com_history[edge].append(edge_attr['weight'])
+                    # send data 
+                    if edge_attr['weight'] == 1:
+                        agent_j = G.nodes[j]['agent']
+                        if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
+                            agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor, step])
+                            model_size = get_model_memory(agent_j.model) # + get_model_memory(agent_j.uncertainty_tensor) #TODO: fix communication
+                        elif cfg['multi_agents']['distributed_algorithm'] == 'CADMM':
+                            agent_i.communicate([agent_j.model])
+                            model_size = get_model_memory(agent_j.model)
+                        agent_i.com_perIter += model_size
+                        agent_i.com_total += model_size
              
         # update
         for i, nbrs in G.adj.items():
@@ -733,7 +799,12 @@ def train_multi_agent(cfg):
         with open(os.path.join(output_path, 'memory_sizes.txt'), 'a') as file: # mode 'a' for append mode, so you can add new content without deleting the previous one
             file.write(com_perIter)
             file.write(com_total)
+
+    data_to_save = {'edge_weight_history': {str(edge): weights for edge, weights in com_history.items()}}
+    with open(os.path.join(output_path, 'graph_data.json'), 'w') as f:
+        json.dump(data_to_save, f, indent=4)     
     print("Agent Communication Info Saved")
+
 
 
 if __name__ == '__main__':
