@@ -2,6 +2,8 @@ inherit_from: configs/Azure/azure.yaml
 mapping:
   bound: [ [-6.5,8.], [-1.5,3.5], [-4.5,3.6] ]
   marching_cubes_bound: [ [-6.5,8.], [-1.5,3.5], [-4.5,3.6] ]
+  keyframe_every: 5
+  map_every: 5
 
 mesh:
   render_color: True
@@ -10,15 +12,22 @@ data:
   datadir: ./data/Apartment
   trainskip: 1
   output: output/Apartment
-  exp_name: three_agents
+  exp_name: apartment_overlapTest
+  load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 tracking:
   gt_pose: True
 
 multi_agents:
-  num_agents: 3 
-  edges_list: [[0,1], [0,2], [1,2]]
-  distributed_algorithm: 'CADMM'
+  num_agents: 3
+  complete_graph: True
+  # edges_list: [[0,5], [0,8], [5,8]] 
+  # edges_for_dropout: [ [0,5,0.5], [0,8,0.5], [5,8,0.5] ] # [node i, node j, possibility of dropping out]
+  #edges_list: [[0,1], [0,2], [1,2]]
+  edges_for_dropout: [ [0,1,0.6], [0,2,0.6], [1,2,0.6] ] # [node i, node j, possibility of dropping out]
+  #edges_for_dropout: []
+  distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
-  com_every: 5
-  track_uncertainty: False
+  #rho: 0
+  track_uncertainty: True  
+  fix_decoder: True

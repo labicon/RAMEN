@@ -42,20 +42,17 @@ class CoSLAM():
         self.get_pose_representation()
         self.keyframeDatabase = self.create_kf_database(config)
         self.model = JointEncoding(config, self.bounding_box).to(self.device)
+        self.fix_decoder = config['multi_agents']['fix_decoder']
         self.create_optimizer()
 
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
-        self.fix_decoder = config['multi_agents']['fix_decoder']
         self.track_uncertainty = config['multi_agents']['track_uncertainty']
         if self.track_uncertainty:
             self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
         self.W_i = torch.zeros(self.model.embed_fn.params.size()).to(self.device) 
 
         # initialize dual variable 
-        if self.fix_decoder:
-            theta_i = p2v(self.model.embed_fn.parameters())
-        else:
-            theta_i = p2v(self.model.parameters())
+        theta_i = p2v(self.model.parameters())
         self.p_i = torch.zeros(theta_i.size()).to(self.device)
         # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
@@ -287,9 +284,9 @@ class CoSLAM():
     
     def scaling_AUQ_CADMM(self, k, uncertainty):
         a_1 = self.rho
-        b_1 = self.rho*100
+        b_1 = self.rho*10
         gamma = 1/(k+1)**2 * (b_1/a_1) + 1 - 1/(k+1)**2
-        b_new = a_1 * gamma
+        b_new = a_1 * gamma #TODO: do we need to decrease it?
 
         p = (b_new-a_1)/(torch.max(uncertainty) - torch.min(uncertainty)) 
         q = a_1 - p*torch.min(uncertainty)
@@ -327,10 +324,7 @@ class CoSLAM():
 
 
     def primal_update(self, theta_i_k, loss):
-        if self.fix_decoder:
-            theta_i = p2v(self.model.embed_fn.parameters())
-        else:
-            theta_i = p2v(self.model.parameters())
+        theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
@@ -340,10 +334,7 @@ class CoSLAM():
     
 
     def primal_update_AUQ_CADMM(self, theta_i_k, loss, W_i):
-        if self.fix_decoder:
-            theta_i = p2v(self.model.embed_fn.parameters())
-        else:
-            theta_i = p2v(self.model.parameters())
+        theta_i = p2v(self.model.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]     
@@ -397,10 +388,7 @@ class CoSLAM():
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
 
 
-        if self.fix_decoder:
-            theta_i_k = p2v(self.model.embed_fn.parameters()).detach()
-        else:
-            theta_i_k = p2v(self.model.parameters()).detach()
+        theta_i_k = p2v(self.model.parameters()).detach()
 
         if dist_algorithm == 'CADMM':
             self.dual_update(theta_i_k)
@@ -609,12 +597,14 @@ class CoSLAM():
         '''
         Create optimizer for mapping
         '''
-        # # Optimizer for BA
-        # trainable_parameters = [{'params': self.model.decoder.parameters(), 'weight_decay': 1e-6, 'lr': self.config['mapping']['lr_decoder']},
-        #                         {'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
+        if self.fix_decoder:
+            #TODO: pretrain
+            trainable_parameters = [{'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
+        else:
+            # Optimizer for BA
+            trainable_parameters = [{'params': self.model.decoder.parameters(), 'weight_decay': 1e-6, 'lr': self.config['mapping']['lr_decoder']},
+                                    {'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
         
-        #TODO: not training decoder now
-        trainable_parameters = [{'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
 
         if not self.config['grid']['oneGrid']:
             trainable_parameters.append({'params': self.model.embed_fn_color.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed_color']})
@@ -693,7 +683,9 @@ def create_agent_graph(cfg, dataset):
         for i in range(num_agents):
             print(f'\nCreating agnet {i}')
             agent_i = CoSLAM(cfg, i, dataset_info)
-            agent_i.load_decoder(load_path=cfg['data']['load_path'])
+            #TODO: pretrain?
+            if cfg['multi_agents']['fix_decoder']:
+                agent_i.load_decoder(load_path=cfg['data']['load_path'])
             attrs = {i:{"agent": agent_i}}
             nx.set_node_attributes(G, attrs)
         nx.set_edge_attributes(G, 1, "weight")
@@ -703,6 +695,9 @@ def create_agent_graph(cfg, dataset):
         for i in range(num_agents):
             print(f'\nCreating agnet {i}')
             agent_i = CoSLAM(cfg, i, dataset_info)
+            #TODO: pretrain?
+            if cfg['multi_agents']['fix_decoder']:
+                agent_i.load_decoder(load_path=cfg['data']['load_path'])
             node_list.append( [ i, {"agent": agent_i} ] )
         G.add_nodes_from(node_list) 
         G.add_edges_from(cfg['multi_agents']['edges_list'], weight=1)

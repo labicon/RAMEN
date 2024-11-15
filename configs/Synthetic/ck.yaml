@@ -14,9 +14,8 @@ data:
   datadir: data/neural_rgbd_data/complete_kitchen
   trainskip: 1
   output: output/Synthetic/ck
-  exp_name: ck_10agents_pretrained
-  load_path: output/Replica/office0/centralized/agent_0/checkpoint1999.pt
-
+  exp_name: ck_3agents_AUQCADMM_dropout_pretrained
+  load_path: output/Synthetic/ck/ck_centralized/agent_0/checkpoint1210.pt
 
 tracking:
   gt_pose: True
@@ -28,9 +27,11 @@ cam:
 
 
 multi_agents:
-  num_agents: 10
-  complete_graph: True
-  edges_for_dropout: []
-  distributed_algorithm: 'CADMM'
+  num_agents: 3
+  complete_graph: False
+  edges_list: [[0,1], [0,2], [1,2]]
+  edges_for_dropout: [ [0,1,0.8], [0,2,0.8] ] # [node i, node j, possibility of dropping out]
+  #edges_for_dropout: []
+  distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
   track_uncertainty: False

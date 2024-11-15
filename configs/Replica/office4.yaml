@@ -13,7 +13,9 @@ data:
   datadir: data/Replica/office4
   trainskip: 1
   output: output/Replica/office4
-  exp_name: office4_20agents_AUQCADMM
+  #exp_name: office4_3agents_dropout_pretrained
+  exp_name: office4_3agents_AUQCADMM_dropout_pretrained
+  load_path: output/Replica/office4/office4_centralized/agent_0/checkpoint1999.pt
   #exp_name: office4_20agents
 
 tracking:
@@ -21,11 +23,12 @@ tracking:
   #iter: 20
 
 multi_agents:
-  num_agents: 20
-  complete_graph: True
-  #edges_list: [[0,1], [0,2], [1,2]]
-  #edges_for_dropout: [ [0,1,0.6], [0,2,0.6] ] # [node i, node j, possibility of dropping out]
-  edges_for_dropout: []
-  distributed_algorithm: 'CADMM'
+  num_agents: 3
+  complete_graph: False
+  edges_list: [[0,1], [0,2], [1,2]]
+  edges_for_dropout: [ [0,1,0.8], [0,2,0.8] ] # [node i, node j, possibility of dropping out]
+  #edges_for_dropout: []
+  distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
-  track_uncertainty: False
+  track_uncertainty: False  
+  fix_decoder: True

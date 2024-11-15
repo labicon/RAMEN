@@ -53,7 +53,7 @@ if __name__ == '__main__':
         description='Arguments for running the NICE-SLAM/iMAP*.'
     )
     parser.add_argument('--config', type=str, help='Path to config file.')
-    parser.add_argument('--agent', type=int, help='Which agent to check.')
+    parser.add_argument('--agent', default=0, type=int, help='Which agent to check.')
     args = parser.parse_args()
 
     cfg = config.load_config(args.config)

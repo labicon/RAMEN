@@ -16,7 +16,9 @@ data:
   trainskip: 1
   output: output/Synthetic/ma
   #exp_name: ma_10agents_AUQCADMM
-  exp_name: ma_centralized
+  #exp_name: ma_3agents_AUQCADMM_dropout_pretrained
+  exp_name: ma_3agents_dropout_pretrained
+  load_path: output/Synthetic/ma/ma_centralized/agent_0/checkpoint919.pt
 
 
 tracking:
@@ -25,9 +27,10 @@ tracking:
 
 
 multi_agents:
-  num_agents: 10
-  complete_graph: True
-  edges_for_dropout: []
+  num_agents: 3
+  complete_graph: False
+  edges_list: [[0,1], [0,2], [1,2]]
+  edges_for_dropout: [ [0,1,0.8], [0,2,0.8] ] # [node i, node j, possibility of dropping out]
   distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
   track_uncertainty: False

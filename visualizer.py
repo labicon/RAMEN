@@ -482,9 +482,13 @@ if __name__ == '__main__':
                 frontend.update_cam_trajectory(i, gt=False)
                 if not args.no_gt_traj:
                     frontend.update_cam_trajectory(i, gt=True)
+        
+        if i == 1:
+            time.sleep(10) # sleep for the first frame
 
     if args.save_rendering:
         time.sleep(15)
+        video_path = os.path.join(cfg['data']['output'], cfg['data']['exp_name'])
         os.system(
-            f"ffmpeg -f image2 -r 30 -pattern_type glob -i '{cfg['data']['exp_name']}/tmp_rendering/*.jpg' -y {cfg['data']['exp_name']}/vis.mp4")
+            f"ffmpeg -f image2 -r 30 -pattern_type glob -i '{video_path}/tmp_rendering_agent{args.agent}/*.jpg' -y {video_path}/vis_{args.agent}.mp4")
 
