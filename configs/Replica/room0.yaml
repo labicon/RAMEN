@@ -8,15 +8,16 @@ mapping:
 
 mesh: 
   render_color: True
-  vis: 100  
+  vis: 50  
 
 
 data:
   datadir: data/Replica/room0
   trainskip: 1
   output: output/Replica/room0
-  exp_name: 3agents_AUQCADMM_dropout
-  load_path: output/Replica/room0/centralized/agent_0/checkpoint1999.pt
+  #exp_name: Pretrain_AUQCADMM_D80_S1000_2
+  exp_name: Pretrain_CADMM_D80_2
+  load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 
 tracking:

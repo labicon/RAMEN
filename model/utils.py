@@ -3,6 +3,9 @@ import torch
 import torch.nn.functional as F
 from math import exp, log, floor
 
+# # TODO
+# from backpack import backpack, extend
+
 
 def mse2psnr(x):
     '''
@@ -122,6 +125,14 @@ def compute_loss(prediction, target, loss_type='l2'):
         return F.mse_loss(prediction, target)
     elif loss_type == 'l1':
         return F.l1_loss(prediction, target)
+
+    # #TODO:
+    # if loss_type == 'l2':
+    #     mse_loss = extend(torch.nn.MSELoss())
+    #     return mse_loss(prediction, target)
+    # elif loss_type == 'l1':
+    #     l1_loss = extend(torch.nn.L1Loss())
+    #     return l1_loss(prediction, target)
 
     raise Exception('Unsupported loss type')
     

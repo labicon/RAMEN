@@ -8,17 +8,16 @@ mapping:
 
 mesh: 
   render_color: True
-  vis: 100  
+  vis: 50  
 
 
 data:
   datadir: data/Replica/office0
   trainskip: 1
   output: output/Replica/office0
-  #exp_name: 3agents_cadmm_dropout
-  exp_name: 3agents_AUQCADMM_dropout
-  load_path: output/Replica/office0/centralized/agent_0/checkpoint1999.pt
-
+  #exp_name: Pretrain_AUQCADMM_D80_S1000_1
+  exp_name: Pretrain_CADMM_D80_1
+  load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 tracking:
   gt_pose: True
@@ -26,11 +25,12 @@ tracking:
 
 multi_agents:
   num_agents: 3 
-  complete_graph: False
-  edges_list: [[0,1], [0,2], [1,2]]
+  complete_graph: True
+  #edges_list: [[0,1], [0,2], [1,2]]
   edges_for_dropout: [ [0,1,0.8], [0,2,0.8], [1,2,0.8] ] # [node i, node j, possibility of dropping out]
   # edges_list: []
-  distributed_algorithm: 'AUQ_CADMM'
+  distributed_algorithm: 'CADMM'
   rho: 0.0001
-  track_uncertainty: False
+  track_uncertainty: True
   fix_decoder: True
+

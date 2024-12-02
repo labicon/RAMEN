@@ -15,9 +15,12 @@ data:
   datadir: data/Replica/office2
   trainskip: 1
   output: output/Replica/office2
-  exp_name: 3agents_AUQCADMM_dropout
+  exp_name: Pretrain_AUQCADMM_D80_S100_2
+  #exp_name: Pretrain_CADMM_D80_2
+  #exp_name: Pretrain_CADMM_D0
   #exp_name: 3agents_cadmm_dropout_2
-  load_path: output/Replica/office2/centralized/agent_0/checkpoint1999.pt
+  #load_path: output/Replica/office2/centralized/agent_0/checkpoint1999.pt
+  load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 
 tracking:
@@ -27,10 +30,11 @@ tracking:
 multi_agents:
   num_agents: 3
   complete_graph: True
-  edges_list: [[0,1], [0,2], [1,2]]
-  edges_for_dropout: [ [0,1,0.8], [0,2,0.8], [1,2,0.8] ] # [node i, node j, possibility of dropping out]
-  #edges_for_dropout: []
-  distributed_algorithm: 'AUQ_CADMM'
+  #edges_list: [[0,1], [0,2], [1,2]]
+  #edges_for_dropout: [ [0,1,0.8], [0,2,0.8], [1,2,0.8] ] # [node i, node j, possibility of dropping out]
+  edges_for_dropout: []
+  distributed_algorithm: 'CADMM'
   rho: 0.0001
   track_uncertainty: True
   fix_decoder: True
+

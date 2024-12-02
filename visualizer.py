@@ -387,8 +387,8 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, help='Path to config file.')
     parser.add_argument('--vis_input_frame',
                         action='store_true', help='visualize input frames')
-    parser.add_argument('--no_gt_traj',
-                        action='store_true', help='not visualize gt trajectory')
+    parser.add_argument('--gt_traj',
+                        action='store_true', help='visualize gt trajectory')
     parser.add_argument('--agent', default=0, type=int, help='which agent mesh to show')  
     parser.add_argument('--show_last',
                         action='store_true', help='show the whole trajectories and the last mesh')
@@ -474,13 +474,13 @@ if __name__ == '__main__':
         if args.mesh_only == False:
             for id in range(len(estimate_c2w_list_agents)):
                 frontend.update_pose(id, estimate_c2w_list_agents[id][i], gt=False)
-                if not args.no_gt_traj:
+                if args.gt_traj:
                     frontend.update_pose(id, gt_c2w_list[id*num_frames+i], gt=True)
             # the visualizer might get stucked if update every frame
             # with a long sequence (10000+ frames)
             if (i+1) % 10 == 0 or (i+1) == num_frames:
                 frontend.update_cam_trajectory(i, gt=False)
-                if not args.no_gt_traj:
+                if args.gt_traj:
                     frontend.update_cam_trajectory(i, gt=True)
         
         if i == 1:

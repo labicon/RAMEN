@@ -45,6 +45,11 @@ def get_encoder(encoding, input_dim=3,
         )
         out_dim = embed.n_output_dims
 
+        # # TODO: use pytorch implementation of hah grid?
+        # from gridencoder import GridEncoder
+        # embed = GridEncoder(input_dim=input_dim, num_levels=n_levels, level_dim=level_dim, base_resolution=base_resolution, log2_hashmap_size=log2_hashmap_size, desired_resolution=desired_resolution, gridtype='hash', align_corners=False)
+        # out_dim = embed.output_dim
+        
     # Spherical harmonics encoding
     elif 'spherical' in encoding.lower():
         embed = tcnn.Encoding(

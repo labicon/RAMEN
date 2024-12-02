@@ -22,6 +22,7 @@ from torch.nn.utils import parameters_to_vector as p2v
 import config
 from model.scene_rep import JointEncoding
 from model.keyframe import KeyFrameDatabase
+from model.decoder_NICESLAM import NICE
 from datasets.dataset import get_dataset
 from utils import coordinates, extract_mesh, colormap_image
 from tools.eval_ate import pose_evaluation
@@ -30,7 +31,7 @@ from optimization.utils import at_to_transform_matrix, qt_to_transform_matrix, m
 import sys
 
 
-class CoSLAM():
+class Mapping():
     def __init__(self, config, id, dataset_info):
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,12 +45,16 @@ class CoSLAM():
         self.model = JointEncoding(config, self.bounding_box).to(self.device)
         self.fix_decoder = config['multi_agents']['fix_decoder']
         self.create_optimizer()
-
+      
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
         self.track_uncertainty = config['multi_agents']['track_uncertainty']
         if self.track_uncertainty:
             self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
-        self.W_i = torch.zeros(self.model.embed_fn.params.size()).to(self.device) 
+            self.W_i = torch.zeros(self.uncertainty_tensor.size()).to(self.device) 
+
+        # save loss 
+        self.total_loss = []
+        self.obj_loss = []
 
         # initialize dual variable 
         theta_i = p2v(self.model.parameters())
@@ -144,6 +149,8 @@ class CoSLAM():
         '''
         save_dict = {'pose': self.est_c2w_data,
                      'pose_rel': self.est_c2w_data_rel,
+                     'total_loss': self.total_loss,
+                     'obj_loss': self.obj_loss,
                      'model': self.model.state_dict()}
         torch.save(save_dict, save_path)
         print('Save the checkpoint')
@@ -271,16 +278,6 @@ class CoSLAM():
 
         return loss
     
-
-    def get_pose_param_optim(self, poses, mapping=True):
-        task = 'mapping' if mapping else 'tracking'
-        cur_trans = torch.nn.parameter.Parameter(poses[:, :3, 3])
-        cur_rot = torch.nn.parameter.Parameter(self.matrix_to_tensor(poses[:, :3, :3]))
-        pose_optimizer = torch.optim.Adam([{"params": cur_rot, "lr": self.config[task]['lr_rot']},
-                                               {"params": cur_trans, "lr": self.config[task]['lr_trans']}])
-        
-        return cur_rot, cur_trans, pose_optimizer
- 
     
     def scaling_AUQ_CADMM(self, k, uncertainty):
         a_1 = self.rho/1000
@@ -357,37 +354,18 @@ class CoSLAM():
             cur_frame_id: current frame id
             dist_algorithm: algorithm used for multi-agent learning
         '''
-        pose_optimizer = None
 
         # all the KF poses: 0, 5, 10, ...
         poses = torch.stack([self.est_c2w_data[i] for i in range(0, cur_frame_id, self.config['mapping']['keyframe_every'])])
-
-        # frame ids for all KFs, used for update poses after optimization
-        frame_ids_all = torch.tensor(list(range(0, cur_frame_id, self.config['mapping']['keyframe_every'])))
-
-        if len(self.keyframeDatabase.frame_ids) < 2:
-            poses_fixed = torch.nn.parameter.Parameter(poses).to(self.device)
-            current_pose = self.est_c2w_data[cur_frame_id][None,...]
-            poses_all = torch.cat([poses_fixed, current_pose], dim=0)
-        
-        else:
-            poses_fixed = torch.nn.parameter.Parameter(poses[:1]).to(self.device)
-            current_pose = self.est_c2w_data[cur_frame_id][None,...]
-            cur_rot, cur_trans, pose_optimizer, = self.get_pose_param_optim(torch.cat([poses[1:], current_pose]))
-            pose_optim = self.matrix_from_tensor(cur_rot, cur_trans).to(self.device)
-            poses_all = torch.cat([poses_fixed, pose_optim], dim=0)
-        
-        if self.gt_pose:
-            pose_optimizer = None
+        poses_fixed = torch.nn.parameter.Parameter(poses).to(self.device)
+        current_pose = self.est_c2w_data[cur_frame_id][None,...]
+        poses_all = torch.cat([poses_fixed, current_pose], dim=0)
 
         # Set up optimizer
         self.map_optimizer.zero_grad()
-        if pose_optimizer is not None:
-            pose_optimizer.zero_grad()
         
         current_rays = torch.cat([batch['direction'], batch['rgb'], batch['depth'][..., None]], dim=-1)
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
-
 
         theta_i_k = p2v(self.model.parameters()).detach()
 
@@ -399,6 +377,8 @@ class CoSLAM():
             W_i = torch.nn.functional.pad(uncertainty_i, (0,padding_size), "constant", self.rho) 
             self.dual_update_AUQ_CADMM(theta_i_k, W_i)
 
+        mean_total_loss = 0
+        mean_obj_loss = 0
         for i in range(self.config['mapping']['iters']):
 
             # Sample rays with real frame ids
@@ -423,13 +403,14 @@ class CoSLAM():
             rays_o = poses_all[ids_all, None, :3, -1].repeat(1, rays_d.shape[1], 1).reshape(-1, 3)
             rays_d = rays_d.reshape(-1, 3)
 
-
             ret = self.model.forward(rays_o, rays_d, target_s, target_d)
 
             self.map_optimizer.zero_grad()
 
             loss = self.get_loss_from_ret(ret, smooth=True)
             loss.backward(retain_graph=True)
+            mean_obj_loss += loss.item() #item() method extracts the loss’s value as a Python float.
+
             if self.track_uncertainty:
                 grid_grad = self.model.embed_fn.params.grad
                 grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
@@ -443,155 +424,21 @@ class CoSLAM():
                 loss.backward(retain_graph=True)
 
             self.map_optimizer.step()
-            
-            if pose_optimizer is not None and (i + 1) % cfg["mapping"]["pose_accum_step"] == 0:
-                pose_optimizer.step()
-                # get SE3 poses to do forward pass
-                pose_optim = self.matrix_from_tensor(cur_rot, cur_trans)
-                pose_optim = pose_optim.to(self.device)
-                # So current pose is always unchanged
-                if self.config['mapping']['optim_cur']:
-                    poses_all = torch.cat([poses_fixed, pose_optim], dim=0)
-                
-                else:
-                    current_pose = self.est_c2w_data[cur_frame_id][None,...]
-                    # SE3 poses
-
-                    poses_all = torch.cat([poses_fixed, pose_optim, current_pose], dim=0)
-
-
-                # zero_grad here
-                pose_optimizer.zero_grad()
+            mean_total_loss += loss.item()
         
-        if pose_optimizer is not None and len(frame_ids_all) > 1:
-            for i in range(len(frame_ids_all[1:])):
-                self.est_c2w_data[int(frame_ids_all[i+1].item())] = self.matrix_from_tensor(cur_rot[i:i+1], cur_trans[i:i+1]).detach().clone()[0]
-        
-            if self.config['mapping']['optim_cur']:
-                print('Update current pose')
-                self.est_c2w_data[cur_frame_id] = self.matrix_from_tensor(cur_rot[-1:], cur_trans[-1:]).detach().clone()[0]
- 
-
-    def predict_current_pose(self, frame_id, constant_speed=True):
-        '''
-        Predict current pose from previous pose using camera motion model
-        '''
-        if frame_id == 1 or (not constant_speed):
-            c2w_est_prev = self.est_c2w_data[frame_id-1].to(self.device)
-            self.est_c2w_data[frame_id] = c2w_est_prev
-            
-        else:
-            c2w_est_prev_prev = self.est_c2w_data[frame_id-2].to(self.device)
-            c2w_est_prev = self.est_c2w_data[frame_id-1].to(self.device)
-            delta = c2w_est_prev@c2w_est_prev_prev.float().inverse()
-            self.est_c2w_data[frame_id] = delta@c2w_est_prev
-        
-        return self.est_c2w_data[frame_id]
+        # save loss info 
+        mean_total_loss /= self.config['mapping']['iters']
+        mean_obj_loss /= self.config['mapping']['iters']
+        self.total_loss.append( mean_total_loss )
+        self.obj_loss.append( mean_obj_loss )
 
 
     def tracking_render(self, batch, frame_id):
         '''
-        Tracking camera pose using of the current frame
-        Params:
-            batch['c2w']: Ground truth camera pose [B, 4, 4]
-            batch['rgb']: RGB image [B, H, W, 3]
-            batch['depth']: Depth image [B, H, W, 1]
-            batch['direction']: Ray direction [B, H, W, 3]
-            frame_id: Current frame id (int)
+            just save ground truth pose
         '''
-
         c2w_gt = batch['c2w'][0].to(self.device)
-
-        # Initialize current pose
-        if self.config['tracking']['iter_point'] > 0:
-            cur_c2w = self.est_c2w_data[frame_id]
-        else:
-            cur_c2w = self.predict_current_pose(frame_id, self.config['tracking']['const_speed'])
-
-        indice = None
-        best_sdf_loss = None
-        thresh=0
-
-        iW = self.config['tracking']['ignore_edge_W']
-        iH = self.config['tracking']['ignore_edge_H']
-
-        cur_rot, cur_trans, pose_optimizer = self.get_pose_param_optim(cur_c2w[None,...], mapping=False)
-
-        # Start tracking
-        for i in range(self.config['tracking']['iter']):
-            pose_optimizer.zero_grad()
-            c2w_est = self.matrix_from_tensor(cur_rot, cur_trans)
-
-            # Note here we fix the sampled points for optimisation
-            if indice is None:
-                indice = self.select_samples(self.dataset_info['H']-iH*2, self.dataset_info['W']-iW*2, self.config['tracking']['sample'])
-            
-                # Slicing
-                indice_h, indice_w = indice % (self.dataset_info['H'] - iH * 2), indice // (self.dataset_info['H'] - iH * 2)
-                rays_d_cam = batch['direction'].squeeze(0)[iH:-iH, iW:-iW, :][indice_h, indice_w, :].to(self.device)
-            target_s = batch['rgb'].squeeze(0)[iH:-iH, iW:-iW, :][indice_h, indice_w, :].to(self.device)
-            target_d = batch['depth'].squeeze(0)[iH:-iH, iW:-iW][indice_h, indice_w].to(self.device).unsqueeze(-1)
-
-            rays_o = c2w_est[...,:3, -1].repeat(self.config['tracking']['sample'], 1)
-            rays_d = torch.sum(rays_d_cam[..., None, :] * c2w_est[:, :3, :3], -1)
-
-            ret = self.model.forward(rays_o, rays_d, target_s, target_d)
-            loss = self.get_loss_from_ret(ret)
-            
-            if best_sdf_loss is None:
-                best_sdf_loss = loss.cpu().item()
-                best_c2w_est = c2w_est.detach()
-
-            with torch.no_grad():
-                c2w_est = self.matrix_from_tensor(cur_rot, cur_trans)
-
-                if loss.cpu().item() < best_sdf_loss:
-                    best_sdf_loss = loss.cpu().item()
-                    best_c2w_est = c2w_est.detach()
-                    thresh = 0
-                else:
-                    thresh +=1
-            
-            if thresh >self.config['tracking']['wait_iters']:
-                break
-
-            loss.backward()
-            pose_optimizer.step()
-        
-        if self.config['tracking']['best']:
-            # Use the pose with smallest loss
-            self.est_c2w_data[frame_id] = best_c2w_est.detach().clone()[0]
-        else:
-            # Use the pose after the last iteration
-            self.est_c2w_data[frame_id] = c2w_est.detach().clone()[0]
-
-        if self.gt_pose:
-            self.est_c2w_data[frame_id] = c2w_gt
-
-       # Save relative pose of non-keyframes
-        if frame_id % self.config['mapping']['keyframe_every'] != 0:
-            kf_id = frame_id // self.config['mapping']['keyframe_every']
-            kf_frame_id = kf_id * self.config['mapping']['keyframe_every']
-            c2w_key = self.est_c2w_data[kf_frame_id]
-            delta = self.est_c2w_data[frame_id] @ c2w_key.float().inverse()
-            self.est_c2w_data_rel[frame_id] = delta
-        
-        print('\nAgent{}, Best loss: {}, Last loss{}'.format(self.agent_id, F.l1_loss(best_c2w_est.to(self.device)[0,:3], c2w_gt[:3]).cpu().item(), F.l1_loss(c2w_est[0,:3], c2w_gt[:3]).cpu().item()))
-    
-
-    def convert_relative_pose(self):
-        poses = {}
-        for i in range(len(self.est_c2w_data)):
-            if i % self.config['mapping']['keyframe_every'] == 0:
-                poses[i] = self.est_c2w_data[i]
-            else:
-                kf_id = i // self.config['mapping']['keyframe_every']
-                kf_frame_id = kf_id * self.config['mapping']['keyframe_every']
-                c2w_key = self.est_c2w_data[kf_frame_id]
-                delta = self.est_c2w_data_rel[i] 
-                poses[i] = delta @ c2w_key
-        
-        return poses
+        self.est_c2w_data[frame_id] = c2w_gt
 
 
     def create_optimizer(self):
@@ -605,7 +452,6 @@ class CoSLAM():
             # Optimizer for BA
             trainable_parameters = [{'params': self.model.decoder.parameters(), 'weight_decay': 1e-6, 'lr': self.config['mapping']['lr_decoder']},
                                     {'params': self.model.embed_fn.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed']}]
-        
 
         if not self.config['grid']['oneGrid']:
             trainable_parameters.append({'params': self.model.embed_fn_color.parameters(), 'eps': 1e-15, 'lr': self.config['mapping']['lr_embed_color']})
@@ -656,7 +502,7 @@ class CoSLAM():
         # Add keyframe
         if i % self.config['mapping']['keyframe_every'] == 0:
             self.keyframeDatabase.add_keyframe(batch, filter_depth=self.config['mapping']['filter_depth'])
-            print(f'\nAgent {self.agent_id} add keyframe:{i}')
+            #print(f'\nAgent {self.agent_id} add keyframe:{i}')
 
         if i % self.config['mesh']['vis']==0:
             self.save_mesh(i, voxel_size=self.config['mesh']['voxel_eval'])
@@ -667,6 +513,8 @@ class CoSLAM():
             self.save_ckpt(model_savepath)
             self.save_mesh(i, voxel_size=self.config['mesh']['voxel_final'])
         
+
+
 
 def create_agent_graph(cfg, dataset):
     """
@@ -683,7 +531,7 @@ def create_agent_graph(cfg, dataset):
         G = nx.complete_graph(num_agents)
         for i in range(num_agents):
             print(f'\nCreating agnet {i}')
-            agent_i = CoSLAM(cfg, i, dataset_info)
+            agent_i = Mapping(cfg, i, dataset_info)
             #TODO: pretrain?
             if cfg['multi_agents']['fix_decoder']:
                 agent_i.load_decoder(load_path=cfg['data']['load_path'])
@@ -695,7 +543,7 @@ def create_agent_graph(cfg, dataset):
         node_list = []
         for i in range(num_agents):
             print(f'\nCreating agnet {i}')
-            agent_i = CoSLAM(cfg, i, dataset_info)
+            agent_i = Mapping(cfg, i, dataset_info)
             #TODO: pretrain?
             if cfg['multi_agents']['fix_decoder']:
                 agent_i.load_decoder(load_path=cfg['data']['load_path'])
@@ -754,7 +602,7 @@ def train_multi_agent(cfg):
                 G.edges[i,j]['weight'] = random.choices([0, 1], weights=[p, 1-p])[0] # 0 forcom dropout
 
             for i, nbrs in G.adj.items():
-                print(f'\nAgent {i} Communicating')
+                #print(f'\nAgent {i} Communicating')
                 agent_i = G.nodes[i]['agent']
                 agent_i.neighbors = [] # clear communication buffer, only save the latest weights
                 agent_i.com_perIter = 0
@@ -804,25 +652,16 @@ def train_multi_agent(cfg):
 
 
 if __name__ == '__main__':
-    """
-         python .\coslam_agents.py --config .\configs\Azure\apartment_agents.yaml
-    """
 
     print('Start running...')
     parser = argparse.ArgumentParser(
         description='Arguments for running the NICE-SLAM/iMAP*.'
     )
     parser.add_argument('--config', type=str, help='Path to config file.')
-    parser.add_argument('--input_folder', type=str,
-                        help='input folder, this have higher priority, can overwrite the one in config file')
-    parser.add_argument('--output', type=str,
-                        help='output folder, this have higher priority, can overwrite the one in config file')
     
     args = parser.parse_args()
 
     cfg = config.load_config(args.config)
-    if args.output is not None:
-        cfg['data']['output'] = args.output
 
     if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
         cfg['multi_agents']['track_uncertainty'] = True
