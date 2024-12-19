@@ -16,7 +16,6 @@ from tqdm import tqdm, trange
 
 import networkx as nx 
 import matplotlib.pyplot as plt
-from torch.nn.utils import parameters_to_vector as p2v
 
 # Local imports
 import config
@@ -30,10 +29,7 @@ from optimization.utils import at_to_transform_matrix, qt_to_transform_matrix, m
 
 import sys
 
-# for Hessian 
-from backpack import backpack, extend
-from backpack.extensions import (DiagHessian,)
-import time 
+from torch.nn.utils import parameters_to_vector as p2v
 
 class Mapping():
     def __init__(self, config, id, dataset_info):
@@ -47,16 +43,12 @@ class Mapping():
         self.get_pose_representation()
         self.keyframeDatabase = self.create_kf_database(config)
         self.model = JointEncoding(config, self.bounding_box).to(self.device)
-        self.model = extend(self.model)
         self.fix_decoder = config['multi_agents']['fix_decoder']
         self.create_optimizer()
       
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
         self.track_uncertainty = config['multi_agents']['track_uncertainty']
         if self.track_uncertainty:
-   
-            for param in self.model.embed_fn.parameters():
-                print(param.size())
             self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
             self.W_i = torch.zeros(self.uncertainty_tensor.size()).to(self.device) 
 
@@ -65,7 +57,7 @@ class Mapping():
         self.obj_loss = []
 
         # initialize dual variable 
-        theta_i = p2v(self.model.parameters())
+        theta_i = p2v(self.model.embed_fn.parameters())
         self.p_i = torch.zeros(theta_i.size()).to(self.device)
         # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
@@ -287,30 +279,28 @@ class Mapping():
         return loss
     
     
-    def scaling_AUQ_CADMM(self, k, uncertainty):
-        a_1 = self.rho/1000
+    def scaling_AUQ_CADMM(self, k, uncertainty_i, uncertainty_j):
+        uncertainty = uncertainty_i + uncertainty_j
+        a_0 = self.rho/1000
         b_1 = self.rho
-        gamma = 1/(k+1)**2 * (b_1/a_1) + 1 - 1/(k+1)**2
-        b_new = a_1 * gamma #TODO: do we need to decrease it?
-        b_new = b_1
+        #gamma = 1/(k+1)**2 * (a_0/b_1) + (1 - 1/(k+1)**2)
+        #a_1 = b_1 * gamma
+        a_1 = a_0 # no decay
 
-        p = (b_new-a_1)/(torch.max(uncertainty) - torch.min(uncertainty)) 
+        # scale to a_1 and b_1: uncertainty_scaled = p*uncertainty + q
+        p = (b_1-a_1)/(torch.max(uncertainty) - torch.min(uncertainty)) 
         q = a_1 - p*torch.min(uncertainty)
-        uncertainty_scaled = p*uncertainty + q
-        return uncertainty_scaled
+        return p, q
 
 
     def communicate(self,input):
         model_j = input[0]
-        theta_j = p2v(model_j.parameters()).detach()
+        theta_j = p2v(model_j.embed_fn.parameters()).detach()
 
         if self.dist_algorithm == 'AUQ_CADMM':
             uncertainty_j = input[1].detach()
             step = input[2]
-            uncertainty_j = self.scaling_AUQ_CADMM(k=step, uncertainty=uncertainty_j)
-            padding_size = theta_j.size(0) - uncertainty_j.size(0)
-            W_j = torch.nn.functional.pad(uncertainty_j, (0,padding_size), "constant", self.rho) 
-            self.neighbors.append( [theta_j, W_j] )
+            self.neighbors.append( [theta_j, uncertainty_j] )
 
         elif self.dist_algorithm == 'CADMM':
             self.neighbors.append( [theta_j] )
@@ -322,15 +312,18 @@ class Mapping():
             self.p_i += self.rho * (theta_i_k - theta_j_k)    
 
 
-    def dual_update_AUQ_CADMM(self, theta_i_k, W_i):
+    def dual_update_AUQ_CADMM(self, theta_i_k, uncertainty_i, k):
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
-            W_j = neighbor[1]
+            uncertainty_j = neighbor[1]
+            p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+            W_i = p*uncertainty_i + q
+            W_j = p*uncertainty_j + q
             self.p_i +=  2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, W_i + W_j)
 
 
     def primal_update(self, theta_i_k, loss):
-        theta_i = p2v(self.model.parameters())
+        theta_i = p2v(self.model.embed_fn.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
@@ -339,42 +332,21 @@ class Mapping():
         return loss
     
 
-    def primal_update_AUQ_CADMM(self, theta_i_k, loss, W_i):
-        theta_i = p2v(self.model.parameters())
+    def primal_update_AUQ_CADMM(self, theta_i_k, loss, uncertainty_i, k):
+        theta_i = p2v(self.model.embed_fn.parameters())
         loss = loss + torch.dot(theta_i, self.p_i)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]     
-            W_j = neighbor[1]
+            uncertainty_j = neighbor[1]
+            p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+            W_i = p*uncertainty_i + q
+            W_j = p*uncertainty_j + q
             difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
             weighted_norm = torch.dot(difference*W_i, difference)
             loss += weighted_norm
         return loss
 
-    def get_second_order_grad(self, grads, xs):
-        start = time.time()
 
-        # Reshape to add a dummy dimension for batching
-        grads = grads.view(-1, 2)
-        xs = xs.view(-1, 2)
-
-        # Compute gradients for all elements at once
-        grads2 = torch.autograd.grad(
-            outputs=grads,
-            inputs=xs,
-            retain_graph=True,
-            #grad_outputs=torch.ones_like(grads),  # Dummy gradients
-            #materialize_grads=True,
-            #allow_unused=True,
-        )[0]
-
-        print('Time used is ', time.time() - start)
-        print(grads2.sum())
-        print(grads2)
-        sys.exit()
-        return grads2
-    
-
-    
     def global_BA(self, batch, cur_frame_id, dist_algorithm):
         '''
         Global bundle adjustment that includes all the keyframes and the current frame
@@ -399,15 +371,12 @@ class Mapping():
         current_rays = torch.cat([batch['direction'], batch['rgb'], batch['depth'][..., None]], dim=-1)
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
 
-        theta_i_k = p2v(self.model.parameters()).detach()
+        theta_i_k = p2v(self.model.embed_fn.parameters()).detach()
 
         if dist_algorithm == 'CADMM':
             self.dual_update(theta_i_k)
         elif dist_algorithm == 'AUQ_CADMM':
-            uncertainty_i = self.scaling_AUQ_CADMM(k=cur_frame_id, uncertainty=self.uncertainty_tensor)
-            padding_size = theta_i_k.size(0) - uncertainty_i.size(0)
-            W_i = torch.nn.functional.pad(uncertainty_i, (0,padding_size), "constant", self.rho) 
-            self.dual_update_AUQ_CADMM(theta_i_k, W_i)
+            self.dual_update_AUQ_CADMM(theta_i_k, self.uncertainty_tensor, cur_frame_id)
 
         mean_total_loss = 0
         mean_obj_loss = 0
@@ -438,31 +407,27 @@ class Mapping():
             ret = self.model.forward(rays_o, rays_d, target_s, target_d)
 
             self.map_optimizer.zero_grad()
-            
+
             loss = self.get_loss_from_ret(ret, smooth=True)
-            # retain_graph so the graph for grads compute won't be freed. create_graph to allow high order derivatives
-            if i == (self.config['mapping']['iters'] - 1):
-                loss.backward(retain_graph=True, create_graph=True) 
-            else:
-                loss.backward(retain_graph=True) 
+            loss.backward(retain_graph=True)
             mean_obj_loss += loss.item() #item() method extracts the loss’s value as a Python float.
 
             if self.track_uncertainty:
                 grid_grad = self.model.embed_fn.params.grad
                 grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
                 self.uncertainty_tensor += grid_has_grad
-                if i == (self.config['mapping']['iters'] - 1):
-                    self.get_second_order_grad(grid_grad, self.model.embed_fn.params) #TODO: hessian?
 
             if dist_algorithm == 'CADMM':
                 loss = self.primal_update(theta_i_k, loss)
-                loss.backward()
+                loss.backward(retain_graph=True)
             elif dist_algorithm == 'AUQ_CADMM':
-                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, W_i)
-                loss.backward()
+                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, self.uncertainty_tensor, cur_frame_id)
+                loss.backward(retain_graph=True)
 
             self.map_optimizer.step()
             mean_total_loss += loss.item()
+
+            torch.cuda.empty_cache()
         
         # save loss info 
         mean_total_loss /= self.config['mapping']['iters']
@@ -614,13 +579,12 @@ def get_data_memory(dataset, cfg, frames_per_agent):
 
 
 def get_model_memory(model):
-    model_tensor = p2v(model.parameters())
+    model_tensor = model.embed_fn.params
     model_size = torch.numel(model_tensor)*model_tensor.element_size() / 1e6 # bytes to megabytes
     return model_size
 
 
 def train_multi_agent(cfg):
-
     dataset = get_dataset(cfg)
 
     G, frames_per_agent = create_agent_graph(cfg, dataset)
@@ -671,6 +635,7 @@ def train_multi_agent(cfg):
             for key in list(batch_i.keys())[1:]:
                 batch_i[key] = batch_i[key].unsqueeze(0)
             agent_i.run(step, batch_i)
+
 
     # write communication info
     output_path = os.path.join(cfg['data']['output'], cfg['data']['exp_name'])

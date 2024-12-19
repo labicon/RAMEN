@@ -146,9 +146,9 @@ def calc_3d_metric(rec_meshfile, gt_meshfile, align=True):
     accuracy_rec *= 100  # convert to cm
     completion_rec *= 100  # convert to cm
     completion_ratio_rec *= 100  # convert to %
-    print('accuracy: ', accuracy_rec)
-    print('completion: ', completion_rec)
-    print('completion ratio: ', completion_ratio_rec)
+    print('accuracy: {:.2f}'.format(accuracy_rec) )
+    print('completion: {:.2f}'.format(completion_rec) )
+    print('completion ratio: {:.2f}'.format(completion_ratio_rec) )
 
     return{
         'acc': accuracy_rec,

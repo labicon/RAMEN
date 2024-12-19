@@ -394,6 +394,8 @@ if __name__ == '__main__':
                         action='store_true', help='show the whole trajectories and the last mesh')
     parser.add_argument('--mesh_only',
                         action='store_true', help='only show mesh')
+    parser.add_argument('--culled_mesh',
+                        action='store_true', help='show culled mesh')
     parser.add_argument('--show_uncertainty',
                         action='store_true', help='visualize grid uncertainty')
     parser.add_argument('--CADMM_Rho', default=-1, type=int, help='which CADMM weight to show')  
@@ -431,7 +433,7 @@ if __name__ == '__main__':
         N_l, params_in_level = get_grid_resolution(cfg) #TODO: for now we only visualize level 0 grid
         print(f'N_l = {N_l}, params_in_level = {params_in_level}')
 
-    start_frame = num_frames - 1 if args.show_last else 0
+    start_frame = num_frames - 1 if (args.show_last or args.culled_mesh) else 0
     for i in tqdm(range(start_frame, num_frames)): # tqdm progress bar starts with 1
         # show every fourth frame for speed up
         if args.vis_input_frame and i % 4 == 0:
@@ -456,6 +458,9 @@ if __name__ == '__main__':
         time.sleep(0.03) # don't delete this, otherwise loop will immediately ends before mesh and trajectories can be updated
 
         meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}.ply'
+        if args.culled_mesh:
+            meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}_cull_occlusion.ply'
+
         if os.path.isfile(meshfile):
             frontend.update_mesh(meshfile)
         
