@@ -19,9 +19,10 @@ data:
   datadir: ./data/scannet/scene0000_00
   trainskip: 1
   output: output/scannet/scene0000_00
-  exp_name: Pretrain_AUQCADMM_D70_NS1000_test
-  #exp_name: Pretrain_CADMM_D70_1
-  #exp_name: CADMM_D70_1
+  exp_name: Pretrain_AUQCADMM_D70_NS1000_1
+  #exp_name: Pretrain_CADMM_D70_3
+  #exp_name: Pretrain_MACIM_D70_1
+  #exp_name: CADMM_D70_3
   #exp_name: Centralized
   load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
@@ -36,7 +37,7 @@ multi_agents:
   #edges_list: [[0,1], [0,2], [1,2]]
   edges_for_dropout: [ [0,1,0.7], [0,2,0.7], [1,2,0.7] ] # [node i, node j, possibility of dropping out]
   #edges_for_dropout: []
-  distributed_algorithm: 'AUQ_CADMM'
+  distributed_algorithm: 'MACIM'
   rho: 0.0001
-  track_uncertainty: True
+  track_uncertainty: False
   fix_decoder: True

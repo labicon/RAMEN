@@ -305,6 +305,9 @@ class Mapping():
         elif self.dist_algorithm == 'CADMM':
             self.neighbors.append( [theta_j] )
 
+        elif self.dist_algorithm == 'MACIM':
+            self.neighbors.append( [theta_j] )
+
 
     def dual_update(self, theta_i_k):
         for neighbor in self.neighbors:
@@ -324,7 +327,7 @@ class Mapping():
 
     def primal_update(self, theta_i_k, loss):
         theta_i = p2v(self.model.embed_fn.parameters())
-        loss = loss + torch.dot(theta_i, self.p_i)
+        loss = loss + torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
             difference = self.rho * torch.norm(theta_i - (theta_i_k+theta_j_k)/2)**2
@@ -334,7 +337,7 @@ class Mapping():
 
     def primal_update_AUQ_CADMM(self, theta_i_k, loss, uncertainty_i, k):
         theta_i = p2v(self.model.embed_fn.parameters())
-        loss = loss + torch.dot(theta_i, self.p_i)
+        #loss = loss + torch.dot(theta_i, self.p_i) # TODO: uncomment?
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]     
             uncertainty_j = neighbor[1]
@@ -344,6 +347,15 @@ class Mapping():
             difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
             weighted_norm = torch.dot(difference*W_i, difference)
             loss += weighted_norm
+        return loss
+
+
+    def MACIM_cc_loss(self, loss):
+        theta_i = p2v(self.model.embed_fn.parameters())
+        for neighbor in self.neighbors:
+            theta_j = neighbor[0]
+            difference = self.rho * torch.norm(theta_i - theta_j)**2
+            loss += difference
         return loss
 
 
@@ -374,7 +386,7 @@ class Mapping():
         theta_i_k = p2v(self.model.embed_fn.parameters()).detach()
 
         if dist_algorithm == 'CADMM':
-            self.dual_update(theta_i_k)
+            self.dual_update(theta_i_k) 
         elif dist_algorithm == 'AUQ_CADMM':
             self.dual_update_AUQ_CADMM(theta_i_k, self.uncertainty_tensor, cur_frame_id)
 
@@ -423,12 +435,14 @@ class Mapping():
             elif dist_algorithm == 'AUQ_CADMM':
                 loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, self.uncertainty_tensor, cur_frame_id)
                 loss.backward(retain_graph=True)
+            elif dist_algorithm == 'MACIM':
+                loss = self.MACIM_cc_loss(loss)
+                loss.backward(retain_graph=True)
 
             self.map_optimizer.step()
             mean_total_loss += loss.item()
 
-            torch.cuda.empty_cache()
-        
+
         # save loss info 
         mean_total_loss /= self.config['mapping']['iters']
         mean_obj_loss /= self.config['mapping']['iters']
@@ -479,11 +493,6 @@ class Mapping():
         if self.track_uncertainty == True:
             uncertainty_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'uncertain_track{}.pt'.format(i))
             torch.save(self.uncertainty_tensor, uncertainty_savepath)
-
-        if self.dist_algorithm == 'AUQ_CADMM' and len(self.neighbors) > 0:
-            Rho_savepath = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'CADMM_Rho{}.pt'.format(i))
-            Rho = [item[1] for item in self.neighbors]
-            torch.save(Rho, Rho_savepath)
 
 
     def run(self, i, batch):
@@ -622,6 +631,9 @@ def train_multi_agent(cfg):
                             agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor, step])
                             model_size = get_model_memory(agent_j.model) # + get_model_memory(agent_j.uncertainty_tensor) #TODO: fix communication
                         elif cfg['multi_agents']['distributed_algorithm'] == 'CADMM':
+                            agent_i.communicate([agent_j.model])
+                            model_size = get_model_memory(agent_j.model)
+                        elif cfg['multi_agents']['distributed_algorithm'] == 'MACIM':
                             agent_i.communicate([agent_j.model])
                             model_size = get_model_memory(agent_j.model)
                         agent_i.com_perIter += model_size
