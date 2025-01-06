@@ -1,9 +1,9 @@
-inherit_from: configs/ScanNet/scannet.yaml
+inherit_from: configs/scannet/scannet.yaml
 mapping:
   bound: [[-0.1,8.6],[-0.1,8.9],[-0.3,3.3]]
   marching_cubes_bound: [[-0.1,8.6],[-0.1,8.9],[-0.3,3.3]]
-  keyframe_every: 5
-  map_every: 5
+  keyframe_every: 1
+  map_every: 1
 
 
 mesh: 
@@ -19,11 +19,10 @@ data:
   datadir: ./data/scannet/scene0000_00
   trainskip: 1
   output: output/scannet/scene0000_00
-  exp_name: Pretrain_AUQCADMM_D70_NS1000_1
-  #exp_name: Pretrain_CADMM_D70_3
-  #exp_name: Pretrain_MACIM_D70_1
-  #exp_name: CADMM_D70_3
-  #exp_name: Centralized
+  #exp_name: DiNNO_D50_1
+  exp_name: Ours_D50_3
+  #exp_name: DSGD_D50_3
+  #exp_name: DSGT_D50_1
   load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 
@@ -34,10 +33,11 @@ tracking:
 multi_agents:
   num_agents: 3
   complete_graph: True
-  #edges_list: [[0,1], [0,2], [1,2]]
-  edges_for_dropout: [ [0,1,0.7], [0,2,0.7], [1,2,0.7] ] # [node i, node j, possibility of dropping out]
+  edges_for_dropout: [ [0,1,0.5], [0,2,0.5], [1,2,0.5] ] # [node i, node j, possibility of dropping out]
   #edges_for_dropout: []
-  distributed_algorithm: 'MACIM'
+  distributed_algorithm: 'DSGT'
   rho: 0.0001
   track_uncertainty: False
-  fix_decoder: True
+  fix_decoder: False
+  alpha: 0.15 # DSGD
+  #alpha: 0.05 # DSGT

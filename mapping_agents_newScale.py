@@ -30,6 +30,8 @@ from optimization.utils import at_to_transform_matrix, qt_to_transform_matrix, m
 import sys
 
 from torch.nn.utils import parameters_to_vector as p2v
+import copy
+
 
 class Mapping():
     def __init__(self, config, id, dataset_info):
@@ -55,15 +57,28 @@ class Mapping():
         # save loss 
         self.total_loss = []
         self.obj_loss = []
+        self.lag_loss = []
+        self.aug_loss = []
 
         # initialize dual variable 
-        theta_i = p2v(self.model.embed_fn.parameters())
+        theta_i = p2v(self.model.parameters())
         self.p_i = torch.zeros(theta_i.size()).to(self.device)
         # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
         # step size in the gradient ascent of the dual variable
         self.rho = config['multi_agents']['rho']
-        
+
+        # for DSGD/DSGT
+        self.ds_mat = None # doubly stochastic matrix for DSGD/DSGT
+        self.num_params = sum( p.numel() for p in self.model.parameters() )
+        self.alpha = config['multi_agents']['alpha']
+        base_zeros = [
+            torch.zeros_like(p, requires_grad=False, device=self.device)
+            for p in self.model.parameters()
+        ]
+        self.g_dsgt = copy.deepcopy(base_zeros)
+        self.y_dsgt = copy.deepcopy(base_zeros) 
+
         self.com_perIter = 0 # communication cost in MB per communication iteration 
         self.com_total = 0 # total accumulated communication cost in MB 
 
@@ -151,6 +166,8 @@ class Mapping():
                      'pose_rel': self.est_c2w_data_rel,
                      'total_loss': self.total_loss,
                      'obj_loss': self.obj_loss,
+                     'lag_loss': self.lag_loss,
+                     'aug_loss': self.aug_loss,
                      'model': self.model.state_dict()}
         torch.save(save_dict, save_path)
         print('Save the checkpoint')
@@ -281,11 +298,8 @@ class Mapping():
     
     def scaling_AUQ_CADMM(self, k, uncertainty_i, uncertainty_j):
         uncertainty = uncertainty_i + uncertainty_j
-        a_0 = self.rho/1000
+        a_1 = self.rho/1000
         b_1 = self.rho
-        #gamma = 1/(k+1)**2 * (a_0/b_1) + (1 - 1/(k+1)**2)
-        #a_1 = b_1 * gamma
-        a_1 = a_0 # no decay
 
         # scale to a_1 and b_1: uncertainty_scaled = p*uncertainty + q
         p = (b_1-a_1)/(torch.max(uncertainty) - torch.min(uncertainty)) 
@@ -295,18 +309,24 @@ class Mapping():
 
     def communicate(self,input):
         model_j = input[0]
-        theta_j = p2v(model_j.embed_fn.parameters()).detach()
+        theta_j = p2v(model_j.parameters()).detach()
 
         if self.dist_algorithm == 'AUQ_CADMM':
             uncertainty_j = input[1].detach()
             step = input[2]
             self.neighbors.append( [theta_j, uncertainty_j] )
 
-        elif self.dist_algorithm == 'CADMM':
+        elif self.dist_algorithm in ('CADMM', 'MACIM'):
             self.neighbors.append( [theta_j] )
 
-        elif self.dist_algorithm == 'MACIM':
-            self.neighbors.append( [theta_j] )
+        elif self.dist_algorithm == 'DSGD':
+            j = input[1]
+            self.neighbors.append( [model_j.parameters(), j] )
+
+        elif self.dist_algorithm == 'DSGT':
+            y_dsgt_j = input[1]
+            j = input[2]
+            self.neighbors.append( [model_j.parameters(), y_dsgt_j, j] )
 
 
     def dual_update(self, theta_i_k):
@@ -316,48 +336,93 @@ class Mapping():
 
 
     def dual_update_AUQ_CADMM(self, theta_i_k, uncertainty_i, k):
+        padding_size = theta_i_k.size(0) - uncertainty_i.size(0)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
             uncertainty_j = neighbor[1]
             p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
             W_i = p*uncertainty_i + q
+            W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
             W_j = p*uncertainty_j + q
+            W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
             self.p_i +=  2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, W_i + W_j)
 
 
     def primal_update(self, theta_i_k, loss):
-        theta_i = p2v(self.model.embed_fn.parameters())
-        loss = loss + torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+        theta_i = p2v(self.model.parameters())
+        lag_loss = torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+        aug_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]
-            difference = self.rho * torch.norm(theta_i - (theta_i_k+theta_j_k)/2)**2
-            loss += difference
-        return loss
+            aug_loss += self.rho * torch.norm(theta_i - (theta_i_k+theta_j_k)/2)**2
+        loss += lag_loss + aug_loss 
+        return loss, lag_loss.item(), aug_loss.item()
     
 
     def primal_update_AUQ_CADMM(self, theta_i_k, loss, uncertainty_i, k):
-        theta_i = p2v(self.model.embed_fn.parameters())
-        #loss = loss + torch.dot(theta_i, self.p_i) # TODO: uncomment?
+        theta_i = p2v(self.model.parameters())
+        lag_loss = torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+        aug_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
+        padding_size = theta_i.size(0) - uncertainty_i.size(0)
         for neighbor in self.neighbors:
             theta_j_k = neighbor[0]     
             uncertainty_j = neighbor[1]
             p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
             W_i = p*uncertainty_i + q
+            W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
             W_j = p*uncertainty_j + q
+            W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
             difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
             weighted_norm = torch.dot(difference*W_i, difference)
-            loss += weighted_norm
-        return loss
+            aug_loss += weighted_norm
+        loss += lag_loss + aug_loss
+        return loss, lag_loss.item(), aug_loss.item()
 
 
     def MACIM_cc_loss(self, loss):
-        theta_i = p2v(self.model.embed_fn.parameters())
+        theta_i = p2v(self.model.parameters())
         for neighbor in self.neighbors:
             theta_j = neighbor[0]
             difference = self.rho * torch.norm(theta_i - theta_j)**2
             loss += difference
         return loss
 
+
+    def DSGD_update(self):
+        rid = self.agent_id
+        deg_i = len(self.neighbors)
+        w = 1/(deg_i+1)
+        with torch.no_grad():
+            for param_i in self.model.parameters():
+                #param_i.multiply_(self.ds_mat[rid, rid]) 
+                param_i.multiply_(w) 
+                param_i.add_(-self.alpha * param_i.grad)  # Gradient descent update
+                param_i.grad.zero_()  # Reset the gradient
+
+            for model_j, j in self.neighbors:
+                for param_i, param_j in zip(self.model.parameters(), model_j):
+                    #param_i.add_(self.ds_mat[rid, j] * param_j)
+                    param_i.add_(w * param_j)
+
+
+    def DSGT_update(self):
+        rid = self.agent_id
+        deg_i = len(self.neighbors)
+        w = 1/(deg_i+1)
+        with torch.no_grad():
+            for p, param_i in enumerate(self.model.parameters()):
+                param_i.multiply_(w) 
+                param_i.add_(-w*self.alpha*self.y_dsgt[p])  # Gradient descent update
+                self.y_dsgt[p].multiply_(w) 
+                self.y_dsgt[p].add_(param_i.grad - self.g_dsgt[p]) 
+                self.g_dsgt[p] = param_i.grad.clone()
+                param_i.grad.zero_() 
+
+            for model_j, y_j, j in self.neighbors:
+                for p, (param_i, param_j) in enumerate(zip(self.model.parameters(), model_j)):
+                    param_i.add_(w*param_j - w*self.alpha*y_j[p])
+                    self.y_dsgt[p].add_(w*y_j[p])
+               
 
     def global_BA(self, batch, cur_frame_id, dist_algorithm):
         '''
@@ -383,7 +448,8 @@ class Mapping():
         current_rays = torch.cat([batch['direction'], batch['rgb'], batch['depth'][..., None]], dim=-1)
         current_rays = current_rays.reshape(-1, current_rays.shape[-1]) 
 
-        theta_i_k = p2v(self.model.embed_fn.parameters()).detach()
+        theta_i_k = p2v(self.model.parameters()).detach()
+
 
         if dist_algorithm == 'CADMM':
             self.dual_update(theta_i_k) 
@@ -392,6 +458,8 @@ class Mapping():
 
         mean_total_loss = 0
         mean_obj_loss = 0
+        mean_lag_loss = 0
+        mean_aug_loss = 0
         for i in range(self.config['mapping']['iters']):
 
             # Sample rays with real frame ids
@@ -430,24 +498,45 @@ class Mapping():
                 self.uncertainty_tensor += grid_has_grad
 
             if dist_algorithm == 'CADMM':
-                loss = self.primal_update(theta_i_k, loss)
+                loss, lag_loss, aug_loss = self.primal_update(theta_i_k, loss)
                 loss.backward(retain_graph=True)
+                self.map_optimizer.step()
+                mean_lag_loss += lag_loss
+                mean_aug_loss += aug_loss
+
             elif dist_algorithm == 'AUQ_CADMM':
-                loss = self.primal_update_AUQ_CADMM(theta_i_k, loss, self.uncertainty_tensor, cur_frame_id)
+                loss, lag_loss, aug_loss  = self.primal_update_AUQ_CADMM(theta_i_k, loss, self.uncertainty_tensor, cur_frame_id)
                 loss.backward(retain_graph=True)
+                self.map_optimizer.step()
+                mean_lag_loss += lag_loss
+                mean_aug_loss += aug_loss
+
             elif dist_algorithm == 'MACIM':
                 loss = self.MACIM_cc_loss(loss)
                 loss.backward(retain_graph=True)
+                self.map_optimizer.step()
 
-            self.map_optimizer.step()
+            elif dist_algorithm == 'DSGD':
+                self.DSGD_update()
+                break # DSDG does one update per mapping iteration 
+
+            elif dist_algorithm == 'DSGT':
+                self.DSGT_update()
+                break # DSDT does one update per mapping iteration 
+
+
             mean_total_loss += loss.item()
 
 
         # save loss info 
         mean_total_loss /= self.config['mapping']['iters']
         mean_obj_loss /= self.config['mapping']['iters']
+        mean_lag_loss /= self.config['mapping']['iters']
+        mean_aug_loss /= self.config['mapping']['iters']
         self.total_loss.append( mean_total_loss )
-        self.obj_loss.append( mean_obj_loss )
+        self.obj_loss.append(mean_obj_loss)
+        self.lag_loss.append(mean_lag_loss)
+        self.aug_loss.append(mean_aug_loss)
 
 
     def tracking_render(self, batch, frame_id):
@@ -567,6 +656,22 @@ def create_agent_graph(cfg, dataset):
     nx.draw(G, with_labels=True, font_weight='bold')
     plt.show()  
 
+    # create doubly stochastic matrix for DSGD and DSGT 
+    N = G.number_of_nodes()
+    W = torch.zeros((N, N))
+    L = nx.laplacian_matrix(G)
+    degs = [L[i, i] for i in range(N)]
+    for i in range(N):
+        for j in range(N):
+            if G.has_edge(i, j) and i != j:
+                W[i, j] = 1.0 / (max(degs[i], degs[j]) + 1.0) # metropolis weights
+    for i in range(N):
+        W[i, i] = 1.0 - torch.sum(W[i, :])
+
+    for i, nbrs in G.adj.items():
+        agent_i = G.nodes[i]['agent']
+        agent_i.ds_mat = W
+
     return G, frames_per_agent
 
 
@@ -587,8 +692,11 @@ def get_data_memory(dataset, cfg, frames_per_agent):
         file.write(total_size)
 
 
-def get_model_memory(model):
-    model_tensor = model.embed_fn.params
+def get_model_memory(model, fix_decoder=False):
+    if fix_decoder:
+        model_tensor = model.embed_fn.params
+    else:
+        model_tensor = p2v(model.parameters())
     model_size = torch.numel(model_tensor)*model_tensor.element_size() / 1e6 # bytes to megabytes
     return model_size
 
@@ -602,7 +710,7 @@ def train_multi_agent(cfg):
     
     edges_for_dropout = cfg['multi_agents']['edges_for_dropout']
     com_history = {}
-
+    fix_decoder = cfg['multi_agents']['fix_decoder']
     for step in trange(0, frames_per_agent, smoothing=0):
 
         # commnuication
@@ -629,13 +737,20 @@ def train_multi_agent(cfg):
                         agent_j = G.nodes[j]['agent']
                         if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
                             agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor, step])
-                            model_size = get_model_memory(agent_j.model) # + get_model_memory(agent_j.uncertainty_tensor) #TODO: fix communication
-                        elif cfg['multi_agents']['distributed_algorithm'] == 'CADMM':
-                            agent_i.communicate([agent_j.model])
-                            model_size = get_model_memory(agent_j.model)
-                        elif cfg['multi_agents']['distributed_algorithm'] == 'MACIM':
-                            agent_i.communicate([agent_j.model])
-                            model_size = get_model_memory(agent_j.model)
+                            model_size = get_model_memory(agent_j.model, fix_decoder)*2
+
+                        elif cfg['multi_agents']['distributed_algorithm'] in ('CADMM', 'MACIM'):
+                            agent_i.communicate([agent_j.model],)
+                            model_size = get_model_memory(agent_j.model, fix_decoder)
+
+                        elif cfg['multi_agents']['distributed_algorithm'] == 'DSGD':
+                            agent_i.communicate([agent_j.model, j])
+                            model_size = get_model_memory(agent_j.model, fix_decoder)
+
+                        elif cfg['multi_agents']['distributed_algorithm'] == 'DSGT':
+                            agent_i.communicate([agent_j.model, agent_j.y_dsgt, j])
+                            model_size = get_model_memory(agent_j.model, fix_decoder)*2
+
                         agent_i.com_perIter += model_size
                         agent_i.com_total += model_size
              
@@ -646,6 +761,7 @@ def train_multi_agent(cfg):
             batch_i["frame_id"] = step
             for key in list(batch_i.keys())[1:]:
                 batch_i[key] = batch_i[key].unsqueeze(0)
+
             agent_i.run(step, batch_i)
 
 

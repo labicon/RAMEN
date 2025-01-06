@@ -385,6 +385,7 @@ if __name__ == '__main__':
         description='Arguments to visualize the SLAM process.'
     )
     parser.add_argument('--config', type=str, help='Path to config file.')
+    parser.add_argument('--mesh_file', default=None, type=str, help='Show a specific mesh')
     parser.add_argument('--vis_input_frame',
                         action='store_true', help='visualize input frames')
     parser.add_argument('--gt_traj',
@@ -460,6 +461,9 @@ if __name__ == '__main__':
         meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}.ply'
         if args.culled_mesh:
             meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}_cull_occlusion.ply'
+
+        if args.mesh_file != None:
+            meshfile = args.mesh_file 
 
         if os.path.isfile(meshfile):
             frontend.update_mesh(meshfile)
