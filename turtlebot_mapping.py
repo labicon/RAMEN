@@ -670,6 +670,7 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
     agent_j = redis_client.get('agent_j')
     if agent_j: 
         print("receive!")
+        agent_j = pickle.loads(agent_j)
         theta_j = torch.from_numpy(agent_j['theta_j']).to(agent_i.device)
         uncertainty_j = torch.from_numpy(agent_j['uncertainty_j']).to(agent_i.device)
         uncertainty_j = uncertainty_j[0:agent_i.uncertainty_tensor.size(0)] # get rid of padding
