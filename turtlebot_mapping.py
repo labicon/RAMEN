@@ -658,7 +658,7 @@ def get_camera_rays(H, W, fx, fy=None, cx=None, cy=None, type='OpenGL'):
 def data_loading(redis_client, rays_d, step, com_every, agent_i):
     # send for consensus 
     if step % com_every == 0:
-        theta_i = p2v(agent_i.model).detach().cpu().numpy()
+        theta_i = p2v(agent_i.model.parameters()).detach().cpu().numpy()
         uncertainty_i = agent_i.uncertainty_tensor.detach().cpu().numpy()
         msg = {'theta_i':theta_i, 'uncertainty_i':uncertainty_i}
         pickled_data = pickle.dumps(msg)
