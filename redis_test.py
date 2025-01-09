@@ -5,13 +5,15 @@ import datetime
 # Redis connection
 redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=False)
 
-theta_i = np.zeros(1633360).astype(np.float32)
-uncertainty_i  = np.zeros(1633360).astype(np.float32)
+
 
 
 while True:
     # send data
     # send data
+    theta_i =  np.random.rand(1633360).astype(np.float32)
+    uncertainty_i  =  np.random.rand(1633360).astype(np.float32)
+
     msg = {'theta_i':theta_i, 'uncertainty_i':uncertainty_i}
     pickled_data = pickle.dumps(msg)
     redis_client.set('agent_i', pickled_data )
