@@ -2,16 +2,18 @@ inherit_from: configs/Replica/replica.yaml
 mapping:
   # bound: [[-2,3.2],[-1.7,2.7],[-1.2,2.0]]
   # marching_cubes_bound: [[-1.9,3.1],[-1.6,2.6],[-1.1,1.8]]
-  bound:  [[-3,3],[-3,3],[-0.5,1.5]] #VICON ROOM
-  marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1.5]]
+  bound:  [[-3,3],[-3,3],[-0.5,1]] #VICON ROOM
+  marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1]]
   keyframe_every: 1
   map_every: 1
   
 
 mesh: 
   render_color: True
-  vis: 100 # 4090
-  #vis: 25 # laptop 
+  vis_desktop: 100 
+  voxel_desktop: 0.02 
+  vis_laptop: 25
+  voxel_laptop: 0.05
 
 
 cam: #oogway
@@ -38,8 +40,9 @@ cam: #oogway
 
 
 data:
-  #num_frames: 2500 # laptop
-  num_frames: 10000 # 4090
+  host: desktop # or laptop
+  num_frames_laptop: 2500 # laptop
+  num_frames_desktop: 10000 # 4090
   downsample: 1
   sc_factor: 1
   output: output/turtlebot

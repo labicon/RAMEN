@@ -709,8 +709,13 @@ def data_loading(redis_client, max_depth, rays_d, step):
 
 
 def turtlebot_mapping(cfg, i):
+    # host could be laptop or desktop (running 4090)
+    host = cfg['data']['host'] 
+    num_frames = cfg['data']['num_frames_{}'.format(host)] # how long you want to run it
+    cfg['mesh']['vis'] = cfg['mesh']['vis_{}'.format(host)]
+    cfg['mesh']['voxel_eval'] = cfg['mesh']['voxel_{}'.format(host)]
+
     # num_frames 
-    num_frames = cfg['data']['num_frames'] # how long you want to run it
     # preparing dataset info
     H, W = cfg['cam']['H'], cfg['cam']['W']
     fx, fy =  cfg['cam']['fx'], cfg['cam']['fy']

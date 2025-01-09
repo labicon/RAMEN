@@ -63,11 +63,16 @@ def create_camera_actor(scale=0.1):
 
 def visualize_ply_dynamic(directory, cfg):
     try:
+        host = cfg['data']['host']
+
         vis = o3d.visualization.Visualizer()
         ctr = vis.get_view_control()
         vis.create_window()
-        vis.get_render_option().mesh_show_back_face = True
-
+        if host =='laptop':
+            vis.get_render_option().mesh_show_back_face = True
+        else:
+            vis.get_render_option().mesh_show_back_face = False
+            
         # add coordinate frame
         coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
         size=0.6, origin=[0, 0, 0])
@@ -123,6 +128,13 @@ def visualize_ply_dynamic(directory, cfg):
                     print(f"latest mesh = {latest_mesh_path}")
                     mesh = o3d.io.read_triangle_mesh(latest_mesh_path)
                     mesh.compute_vertex_normals()
+
+                    # flip face orientation. can't work on my laptop somehow
+                    if host == 'desktop':
+                        new_triangles = np.asarray(mesh.triangles)[:, ::-1]
+                        mesh.triangles = o3d.utility.Vector3iVector(new_triangles)
+                        mesh.triangle_normals = o3d.utility.Vector3dVector(-np.asarray(mesh.triangle_normals))
+                    
                     vis.add_geometry(mesh)
                     if view_params is not None:
                         ctr = vis.get_view_control()
