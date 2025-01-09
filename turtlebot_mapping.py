@@ -710,7 +710,7 @@ def data_loading(redis_client, max_depth, rays_d, step):
 
 def turtlebot_mapping(cfg, i):
     # num_frames 
-    num_frames = 2500 # how long you want to run it
+    num_frames = cfg['data']['num_frames'] # how long you want to run it
     # preparing dataset info
     H, W = cfg['cam']['H'], cfg['cam']['W']
     fx, fy =  cfg['cam']['fx'], cfg['cam']['fy']

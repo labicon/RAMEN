@@ -10,23 +10,25 @@ mapping:
 
 mesh: 
   render_color: True
-  vis: 25  
+  vis: 100 # 4090
+  #vis: 25 # laptop 
 
 
 cam: #oogway
   H: 360
   W: 640
-  # oogway
-  fx: 498.37325
-  fy: 498.37325
-  cx: 327.03568499999994
-  cy: 181.04722166666664
 
-  # # miriel 
-  # fx: 500.20556666666664 
-  # fy: 500.1016433333333 
-  # cx: 324.2802733333333 
-  # cy: 186.87980166666665
+  # # oogway
+  # fx: 498.37325
+  # fy: 498.37325
+  # cx: 327.03568499999994
+  # cy: 181.04722166666664
+
+  # miriel 
+  fx: 500.20556666666664 
+  fy: 500.1016433333333 
+  cx: 324.2802733333333 
+  cy: 186.87980166666665
 
   crop_edge: 0
   near: 0
@@ -36,6 +38,8 @@ cam: #oogway
 
 
 data:
+  #num_frames: 2500 # laptop
+  num_frames: 10000 # 4090
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
@@ -46,7 +50,7 @@ multi_agents:
   distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
   track_uncertainty: False
-  fix_decoder: False
+  fix_decoder: True
   #alpha: 0.15 # DSGD
   alpha: 0.02 # DSGT
 
