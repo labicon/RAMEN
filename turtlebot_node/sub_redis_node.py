@@ -3,7 +3,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy, QoSHistoryPolicy
 import numpy as np
 import sys
 import redis
@@ -34,9 +34,14 @@ class sub_redis_node(Node):
             PoseStamped, f'/vicon/{bot_name}/{bot_name}/pose', self.vicon_data_callback, qos_profile_sensor_data)
 
         # for consensus
+        consensus_qos_profile = QoSProfile(
+                                            reliability=QoSReliabilityPolicy.RELIABLE,
+                                            history=QoSHistoryPolicy.KEEP_LAST,
+                                            depth=2,
+                                            durability=QoSDurabilityPolicy.VOLATILE ) # volatile: 
         self.subscription4 = self.create_subscription(
-            Float32MultiArray, f'/{other_bot_name}/consensus', self.consensus_callback, qos_profile_sensor_data)          
-        self.publisher = self.create_publisher(Float32MultiArray, f'/{bot_name}/consensus', qos_profile_sensor_data)
+            Float32MultiArray, f'/{other_bot_name}/consensus', self.consensus_callback, consensus_qos_profile)          
+        self.publisher = self.create_publisher(Float32MultiArray, f'/{bot_name}/consensus', consensus_qos_profile)
         self.timer = self.create_timer(consensus_publish_waitTime, self.publish_data)  # calls the publish_data functionck every x seconds
 
 
