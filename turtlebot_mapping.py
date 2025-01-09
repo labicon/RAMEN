@@ -655,7 +655,23 @@ def get_camera_rays(H, W, fx, fy=None, cx=None, cy=None, type='OpenGL'):
 
 
 
-def data_loading(redis_client, max_depth, rays_d, step):
+def data_loading(redis_client, rays_d, step, com_every, agent_i):
+    # send for consensus 
+    if step % com_every == 0:
+        theta_i = p2v(agent_i.model).detach().cpu().numpy()
+        uncertainty_i = agent_i.uncertainty_tensor.detach().cpu().numpy()
+        msg = {'theta_i':theta_i, 'uncertainty_i':uncertainty_i}
+        pickled_data = pickle.dumps(msg)
+        redis_client.set('agent_i', pickled_data)
+
+    # Get for consensus 
+    agent_j = redis_client.get('agent_j')
+    if agent_j: 
+        theta_j = torch.from_numpy(agent_j['theta_j']).to(agent_i.device)
+        uncertainty_j = torch.from_numpy(agent_j['uncertainty_j']).to(agent_i.device)
+        agent_i.neighbors = [ [theta_j, uncertainty_j] ]
+        
+
     # Get RGB image from Redis
     rgb_data = redis_client.get('rgb_image')
     if rgb_data:
@@ -715,7 +731,6 @@ def turtlebot_mapping(cfg, i):
     cfg['mesh']['vis'] = cfg['mesh']['vis_{}'.format(host)]
     cfg['mesh']['voxel_eval'] = cfg['mesh']['voxel_{}'.format(host)]
 
-    # num_frames 
     # preparing dataset info
     H, W = cfg['cam']['H'], cfg['cam']['W']
     fx, fy =  cfg['cam']['fx'], cfg['cam']['fy']
@@ -726,6 +741,7 @@ def turtlebot_mapping(cfg, i):
     dataset_info = {'num_frames':num_frames, 'num_rays_to_save':num_rays_to_save, 'H':H, 'W':W }
     rays_d = get_camera_rays(H, W, fx, fy, cx, cy)
     max_depth = cfg['cam']['max_depth']
+    com_every = cfg['multi_agents']['com_every']
 
     # create mapping agent 
     agent_i = Mapping(cfg, i, dataset_info)
@@ -736,7 +752,7 @@ def turtlebot_mapping(cfg, i):
 
     # mapping
     for step in trange(num_frames):
-        batch = data_loading(redis_client, max_depth, rays_d, step)
+        batch = data_loading(redis_client, rays_d, step, com_every, agent_i)
         agent_i.run(step, batch)
 
 

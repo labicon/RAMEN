@@ -12,6 +12,7 @@
   <depend>opencv2</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+   <depend>std_msgs</depend>
   <depend>numpy</depend>
   <depend>redis</depend>
 
