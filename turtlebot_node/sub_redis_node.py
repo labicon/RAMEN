@@ -59,6 +59,7 @@ class sub_redis_node(Node):
 
     
     def consensus_callback(self, msg: Float32MultiArray):
+        print("consensus receive")
         data = np.array(msg.data).reshape((msg.layout.dim[0].size, msg.layout.dim[1].size))
         theta_j = data[0, :]
         uncertainty_j = data[1, :]
@@ -72,6 +73,7 @@ class sub_redis_node(Node):
         # publish
         agent_i =  self.redis_client.get('agent_i')
         if agent_i:
+            print("consensus send")
             agent_i_pickled = pickle.loads(agent_i)
             theta_i = agent_i_pickled['theta_i']
             uncertainty_i = agent_i_pickled['uncertainty_i']
