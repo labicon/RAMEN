@@ -730,6 +730,11 @@ def turtlebot_mapping(cfg, i):
     num_frames = cfg['data']['num_frames_{}'.format(host)] # how long you want to run it
     cfg['mesh']['vis'] = cfg['mesh']['vis_{}'.format(host)]
     cfg['mesh']['voxel_eval'] = cfg['mesh']['voxel_{}'.format(host)]
+    cfg['cam']['fx'] = cfg['cam']['fx_{}'.format(host)] 
+    cfg['cam']['fy'] = cfg['cam']['fy_{}'.format(host)] 
+    cfg['cam']['cx'] = cfg['cam']['cx_{}'.format(host)] 
+    cfg['cam']['cy'] = cfg['cam']['cy_{}'.format(host)] 
+
 
     # preparing dataset info
     H, W = cfg['cam']['H'], cfg['cam']['W']
