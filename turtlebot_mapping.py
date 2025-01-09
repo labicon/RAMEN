@@ -660,6 +660,8 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
     if step % com_every == 0:
         theta_i = p2v(agent_i.model.parameters()).detach().cpu().numpy()
         uncertainty_i = agent_i.uncertainty_tensor.detach().cpu().numpy()
+        padding_needed = len(theta_i) - len(uncertainty_i)
+        uncertainty_i = np.pad(uncertainty_i, (0, padding_needed), 'constant')
         msg = {'theta_i':theta_i, 'uncertainty_i':uncertainty_i}
         pickled_data = pickle.dumps(msg)
         redis_client.set('agent_i', pickled_data)
@@ -667,8 +669,10 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
     # Get for consensus 
     agent_j = redis_client.get('agent_j')
     if agent_j: 
+        print("receive!")
         theta_j = torch.from_numpy(agent_j['theta_j']).to(agent_i.device)
         uncertainty_j = torch.from_numpy(agent_j['uncertainty_j']).to(agent_i.device)
+        uncertainty_j = uncertainty_j[0:agent_i.uncertainty_tensor.size(0)] # get rid of padding
         agent_i.neighbors = [ [theta_j, uncertainty_j] ]
         
 
