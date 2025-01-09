@@ -16,11 +16,18 @@ mesh:
 cam: #oogway
   H: 360
   W: 640
+  # oogway
   fx: 498.37325
   fy: 498.37325
   cx: 327.03568499999994
   cy: 181.04722166666664
-  png_depth_scale: 6553.5 #for depth image in png format
+
+  # # miriel 
+  # fx: 500.20556666666664 
+  # fy: 500.1016433333333 
+  # cx: 324.2802733333333 
+  # cy: 186.87980166666665
+
   crop_edge: 0
   near: 0
   far: 5
