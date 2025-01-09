@@ -10,6 +10,7 @@ import redis
 import pickle  # For serializing the image data
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+import datetime
 
 class sub_redis_node(Node):
     def __init__(self, bot_name, other_bot_name):
@@ -19,7 +20,7 @@ class sub_redis_node(Node):
         self.rgb_image = None
         self.depth_image = None
         self.maxDepth = 10*1000
-        consensus_publish_waitTime = 5.
+        consensus_publish_waitTime = 20. # don't send it fastetr than it can be processed
 
         # Redis connection
         self.redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
@@ -59,7 +60,7 @@ class sub_redis_node(Node):
 
     
     def consensus_callback(self, msg: Float32MultiArray):
-        print("consensus receive")
+        print(f"{datetime.datetime.now()}:    consensus receive")
         data = np.array(msg.data).reshape((msg.layout.dim[0].size, msg.layout.dim[1].size))
         theta_j = data[0, :]
         uncertainty_j = data[1, :]
@@ -73,7 +74,7 @@ class sub_redis_node(Node):
         # publish
         agent_i =  self.redis_client.get('agent_i')
         if agent_i:
-            print("consensus send")
+            print(f"{datetime.datetime.now()}:    consensus send")
             agent_i_pickled = pickle.loads(agent_i)
             theta_i = agent_i_pickled['theta_i']
             uncertainty_i = agent_i_pickled['uncertainty_i']
