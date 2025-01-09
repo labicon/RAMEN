@@ -35,7 +35,7 @@ import cv2
 import redis # for reading images from ROS2 nodes
 import pickle # for loading data from redis
 from scipy.spatial.transform import Rotation # to process quaternion from vicon bridge 
-
+import datetime
 
 class Mapping():
     def __init__(self, config, id, dataset_info):
@@ -660,6 +660,7 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
     if step % com_every == 0:
         theta_i = p2v(agent_i.model.parameters()).detach().cpu().numpy()
         uncertainty_i = agent_i.uncertainty_tensor.detach().cpu().numpy()
+
         padding_needed = len(theta_i) - len(uncertainty_i)
         uncertainty_i = np.pad(uncertainty_i, (0, padding_needed), 'constant')
         msg = {'theta_i':theta_i, 'uncertainty_i':uncertainty_i}
@@ -668,51 +669,48 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
 
     # Get for consensus 
     agent_j = redis_client.get('agent_j')
-    if agent_j: 
-        print("receive!")
+    if agent_j:
+        print(f"{datetime.datetime.now()}: receive agent j!")
         agent_j = pickle.loads(agent_j)
         theta_j = torch.from_numpy(agent_j['theta_j']).to(agent_i.device)
         uncertainty_j = torch.from_numpy(agent_j['uncertainty_j']).to(agent_i.device)
         uncertainty_j = uncertainty_j[0:agent_i.uncertainty_tensor.size(0)] # get rid of padding
         agent_i.neighbors = [ [theta_j, uncertainty_j] ]
-        
+            
 
     # Get RGB image from Redis
     rgb_data = redis_client.get('rgb_image')
-    if rgb_data:
-        rgb_image = pickle.loads(rgb_data)
-        rgb_image = torch.from_numpy(rgb_image.astype(np.float32) / 255.) # Normalize to [0, 1]
+    rgb_image = pickle.loads(rgb_data)
+    rgb_image = torch.from_numpy(rgb_image.astype(np.float32) / 255.) # Normalize to [0, 1]
 
     # Get depth image from Redis
     depth_data = redis_client.get('depth_image')
-    if depth_data:
-        depth_image = pickle.loads(depth_data)
-        depth_image = torch.from_numpy(depth_image.astype(np.float32) / 1000.) # mm to m
+    depth_image = pickle.loads(depth_data)
+    depth_image = torch.from_numpy(depth_image.astype(np.float32) / 1000.) # mm to m
 
     # Get pose from Redis 
     pickled_vicon_data = redis_client.get('vicon_data') 
-    if pickled_vicon_data:
-        vicon_data = pickle.loads(pickled_vicon_data)  # vicon_data is now a PoseStamped object
-        # Extract translation (position)
-        translation = np.array([
-            vicon_data.pose.position.x,
-            vicon_data.pose.position.y,
-            vicon_data.pose.position.z
-        ])
-        # Extract rotation (orientation)
-        rotation = Rotation.from_quat([
-            vicon_data.pose.orientation.x,
-            vicon_data.pose.orientation.y,
-            vicon_data.pose.orientation.z,
-            vicon_data.pose.orientation.w
-        ])
-        # Convert rotation to rotation matrix
-        rotation_matrix = rotation.as_matrix()
-        # Create the 4x4 transformation matrix
-        transformation_matrix = np.eye(4)  # Initialize as identity matrix
-        transformation_matrix[:3, :3] = rotation_matrix  # Set rotation part
-        transformation_matrix[:3, 3] = -translation  # Set translation part
-        pose  = torch.from_numpy(transformation_matrix.astype(np.float32))
+    vicon_data = pickle.loads(pickled_vicon_data)  # vicon_data is now a PoseStamped object
+    # Extract translation (position)
+    translation = np.array([
+        vicon_data.pose.position.x,
+        vicon_data.pose.position.y,
+        vicon_data.pose.position.z
+    ])
+    # Extract rotation (orientation)
+    rotation = Rotation.from_quat([
+        vicon_data.pose.orientation.x,
+        vicon_data.pose.orientation.y,
+        vicon_data.pose.orientation.z,
+        vicon_data.pose.orientation.w
+    ])
+    # Convert rotation to rotation matrix
+    rotation_matrix = rotation.as_matrix()
+    # Create the 4x4 transformation matrix
+    transformation_matrix = np.eye(4)  # Initialize as identity matrix
+    transformation_matrix[:3, :3] = rotation_matrix  # Set rotation part
+    transformation_matrix[:3, 3] = -translation  # Set translation part
+    pose  = torch.from_numpy(transformation_matrix.astype(np.float32))
     
 
     # Create a dummy batch
