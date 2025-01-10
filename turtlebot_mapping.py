@@ -36,6 +36,7 @@ import redis # for reading images from ROS2 nodes
 import pickle # for loading data from redis
 from scipy.spatial.transform import Rotation # to process quaternion from vicon bridge 
 import datetime
+import time 
 
 class Mapping():
     def __init__(self, config, id, dataset_info):
@@ -361,7 +362,7 @@ class Mapping():
 
     def primal_update_AUQ_CADMM(self, theta_i_k, loss, uncertainty_i, k):
         theta_i = p2v(self.model.parameters())
-        lag_loss = torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+        lag_loss = torch.dot(theta_i, self.p_i) 
         aug_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
         padding_size = theta_i.size(0) - uncertainty_i.size(0)
         for neighbor in self.neighbors:
@@ -375,7 +376,9 @@ class Mapping():
             difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
             weighted_norm = torch.dot(difference*W_i, difference)
             aug_loss += weighted_norm
-        loss += lag_loss + aug_loss
+        #loss += lag_loss + aug_loss #TODO: cheat? uncomment? comment?
+        loss += aug_loss
+
         return loss, lag_loss.item(), aug_loss.item()
 
 
@@ -759,6 +762,8 @@ def turtlebot_mapping(cfg, i):
 
     # mapping
     for step in trange(num_frames):
+        if host == 'desktop':
+            time.sleep(0.4) #TODO: syn with laptop
         batch = data_loading(redis_client, rays_d, step, com_every, agent_i)
         agent_i.run(step, batch)
 
