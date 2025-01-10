@@ -96,6 +96,7 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
         bbox.color = (1, 0, 0)  # Red color
         vis.add_geometry(bbox)
 
+        wait_time = 0.5 # in case read before a file is ready
         current_mesh_path = None
         current_ckpt_path = None
         current_uncertainty_path = None 
@@ -115,7 +116,7 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
             if latest_ckpt_path != current_ckpt_path:
                 current_ckpt_path = latest_ckpt_path
                 if latest_ckpt_path is not None:
-                    time.sleep(1)
+                    time.sleep(wait_time)
                     print(f"latest ckpt = {latest_ckpt_path}")
                     ckpt = torch.load(latest_ckpt_path, map_location=torch.device('cpu'))
                     estimate_c2w_list = list(ckpt['pose'].values())
@@ -157,6 +158,7 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
 
                         return combined_mesh
                     radius = 0.025
+                    time.sleep(wait_time)
                     rgb, vertices = process_uncertainty_file(latest_uncertainty_path, cfg, N_l, params_in_level, vis_type='uncertainty')
                     spheres = [create_sphere_mesh(radius, vertices[i], rgb[i]) for i in range(rgb.shape[0])]
                     uncertainty_spheres = combine_meshes(spheres) # add one mesh to visualizer in one go is much faster than add these spheres one by one 
@@ -173,7 +175,7 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
                     vis.remove_geometry(mesh)
 
                 if latest_mesh_path is not None:
-                    time.sleep(1) # need to wait a bit for the file to be fully generated
+                    time.sleep(wait_time) # need to wait a bit for the file to be fully generated
                     print(f"latest mesh = {latest_mesh_path}")
                     mesh = o3d.io.read_triangle_mesh(latest_mesh_path)
                     mesh.compute_vertex_normals()
@@ -210,11 +212,11 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Visualization')
     parser.add_argument('--config', default='configs/turtlebot/test.yaml', type=str, help='Path to config file.')
-    parser.add_argument('--directory', default='output/turtlebot/test/agent_0', type=str, help='directory to find mesh files')
     parser.add_argument('--show_uncertainty',
                         action='store_true', help='visualize grid uncertainty')
     args = parser.parse_args()
 
     cfg = config.load_config(args.config)
-    
-    visualize_ply_dynamic(args.directory, args.show_uncertainty, cfg)
+    directory = os.path.join(cfg['data']['output'], cfg['data']['exp_name'], 'agent_0')
+    print(f'Save path is {directory}')
+    visualize_ply_dynamic(directory, args.show_uncertainty, cfg)
