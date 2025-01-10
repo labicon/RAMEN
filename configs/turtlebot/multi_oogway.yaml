@@ -46,7 +46,7 @@ data:
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
-  exp_name: multi_miriel_1
+  exp_name: multi_oogway_1
   load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 
