@@ -670,7 +670,6 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i):
     # Get for consensus 
     agent_j = redis_client.get('agent_j')
     if agent_j:
-        print(f"{datetime.datetime.now()}: receive agent j!")
         agent_j = pickle.loads(agent_j)
         theta_j = torch.from_numpy(agent_j['theta_j']).to(agent_i.device)
         uncertainty_j = torch.from_numpy(agent_j['uncertainty_j']).to(agent_i.device)
