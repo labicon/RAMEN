@@ -6,6 +6,7 @@ import glob
 import argparse
 import config # coslam load config 
 import torch
+from visualizer import get_grid_resolution, process_uncertainty_file
 
 def get_latest_mesh(directory):
     list_of_files = glob.glob(os.path.join(directory, 'mesh_track*.ply'))
@@ -16,8 +17,6 @@ def get_latest_mesh(directory):
     return latest_file
 
 
-
-
 def get_latest_ckpt(directory):
     list_of_files = glob.glob(os.path.join(directory, 'checkpoint*.pt'))
     if not list_of_files:
@@ -26,6 +25,14 @@ def get_latest_ckpt(directory):
     latest_file = max(list_of_files, key=lambda f: int(f.split('checkpoint_')[-1].split('.pt')[0]))
     return latest_file
 
+
+def get_latest_uncertainty(directory):
+    list_of_files = glob.glob(os.path.join(directory, 'uncertain_track*.pt'))
+    if not list_of_files:
+        return None
+
+    latest_file = max(list_of_files, key=lambda f: int(f.split('uncertain_track')[-1].split('.pt')[0]))
+    return latest_file
 
 
 def create_camera_actor(scale=0.1):
@@ -61,7 +68,7 @@ def create_camera_actor(scale=0.1):
 
 
 
-def visualize_ply_dynamic(directory, cfg):
+def visualize_ply_dynamic(directory, show_uncertainty, cfg):
     try:
         host = cfg['data']['host']
 
@@ -72,6 +79,11 @@ def visualize_ply_dynamic(directory, cfg):
             vis.get_render_option().mesh_show_back_face = True
         else:
             vis.get_render_option().mesh_show_back_face = False
+
+        # ready for uncertainty visualization 
+        if args.show_uncertainty: 
+            N_l, params_in_level = get_grid_resolution(cfg) #TODO: for now we only visualize level 0 grid
+            print(f'N_l = {N_l}, params_in_level = {params_in_level}')
             
         # add coordinate frame
         coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
@@ -86,12 +98,18 @@ def visualize_ply_dynamic(directory, cfg):
 
         current_mesh_path = None
         current_ckpt_path = None
+        current_uncertainty_path = None 
         mesh = None  # Initialize mesh outside the loop
+        uncertainty_spheres = None
         view_params = None
         cam_actor = None
         while True:
             latest_mesh_path = get_latest_mesh(directory)
             latest_ckpt_path = get_latest_ckpt(directory)
+            if args.show_uncertainty: 
+                latest_uncertainty_path = get_latest_uncertainty(directory)
+            else:
+                latest_uncertainty_path = None
 
             # update camera actor 
             if latest_ckpt_path != current_ckpt_path:
@@ -116,7 +134,38 @@ def visualize_ply_dynamic(directory, cfg):
                         vis.update_geometry(cam_actor)
                         pose_prev = pose
 
-            
+
+            # update uncertainty
+            if latest_uncertainty_path != current_uncertainty_path:
+                current_uncertainty_path = latest_uncertainty_path
+
+                if uncertainty_spheres is not None:
+                    vis.remove_geometry(uncertainty_spheres)
+                    
+                if latest_uncertainty_path is not None:
+                    def create_sphere_mesh(radius, center, rgb):
+                        sphere = o3d.geometry.TriangleMesh.create_sphere(radius)
+                        sphere.translate(center)
+                        sphere.paint_uniform_color(rgb)
+                        return sphere
+                    
+                    def combine_meshes(meshes):
+                        """Combine multiple meshes into one mesh."""
+                        combined_mesh = o3d.geometry.TriangleMesh()
+                        for mesh in meshes:
+                            combined_mesh += mesh
+
+                        return combined_mesh
+                    radius = 0.025
+                    rgb, vertices = process_uncertainty_file(latest_uncertainty_path, cfg, N_l, params_in_level, vis_type='uncertainty')
+                    spheres = [create_sphere_mesh(radius, vertices[i], rgb[i]) for i in range(rgb.shape[0])]
+                    uncertainty_spheres = combine_meshes(spheres) # add one mesh to visualizer in one go is much faster than add these spheres one by one 
+                    vis.add_geometry(uncertainty_spheres)
+
+
+
+
+            # update mesh 
             if latest_mesh_path != current_mesh_path:
                 current_mesh_path = latest_mesh_path
 
@@ -136,11 +185,12 @@ def visualize_ply_dynamic(directory, cfg):
                         mesh.triangle_normals = o3d.utility.Vector3dVector(-np.asarray(mesh.triangle_normals))
                     
                     vis.add_geometry(mesh)
-                    if view_params is not None:
-                        ctr = vis.get_view_control()
-                        ctr.convert_from_pinhole_camera_parameters(view_params, allow_arbitrary=True)
+            
 
-            # render options
+            # view control
+            if view_params is not None:
+                ctr = vis.get_view_control()
+                ctr.convert_from_pinhole_camera_parameters(view_params, allow_arbitrary=True)
 
 
             vis.poll_events()
@@ -156,12 +206,15 @@ def visualize_ply_dynamic(directory, cfg):
 
 
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Visualization')
     parser.add_argument('--config', default='configs/turtlebot/test.yaml', type=str, help='Path to config file.')
     parser.add_argument('--directory', default='output/turtlebot/test/agent_0', type=str, help='directory to find mesh files')
+    parser.add_argument('--show_uncertainty',
+                        action='store_true', help='visualize grid uncertainty')
     args = parser.parse_args()
 
     cfg = config.load_config(args.config)
     
-    visualize_ply_dynamic(args.directory, cfg)
+    visualize_ply_dynamic(args.directory, args.show_uncertainty, cfg)

@@ -752,6 +752,7 @@ def turtlebot_mapping(cfg, i):
     rays_d = get_camera_rays(H, W, fx, fy, cx, cy)
     max_depth = cfg['cam']['max_depth']
     com_every = cfg['multi_agents']['com_every']
+    wait_time = cfg['data']['wait_time']
 
     # create mapping agent 
     agent_i = Mapping(cfg, i, dataset_info)
@@ -763,7 +764,7 @@ def turtlebot_mapping(cfg, i):
     # mapping
     for step in trange(num_frames):
         if host == 'desktop':
-            time.sleep(0.4) #TODO: syn with laptop
+            time.sleep(wait_time) #TODO: syn with laptop
         batch = data_loading(redis_client, rays_d, step, com_every, agent_i)
         agent_i.run(step, batch)
 
