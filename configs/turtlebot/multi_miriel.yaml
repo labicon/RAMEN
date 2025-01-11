@@ -47,22 +47,22 @@ data:
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
-  exp_name: multi_miriel_1
+  exp_name: multi_miriel_2CADMM
   load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
 
 training:
   rgb_weight: 5.0
   depth_weight: 0.1
   sdf_weight: 1000
-  fs_weight: 10 # 10 by default
+  fs_weight: 20 # 10 by default
   smooth_weight: 0.000001
   
 multi_agents:
   com_every: 1 
-  distributed_algorithm: 'AUQ_CADMM'
-  rho:  0.0000001
+  distributed_algorithm: 'CADMM'
+  rho:  0.0001
   track_uncertainty: True
-  fix_decoder: True
+  fix_decoder: False
   #alpha: 0.15 # DSGD
   alpha: 0.02 # DSGT
 
