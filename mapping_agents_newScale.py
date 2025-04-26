@@ -636,8 +636,16 @@ def create_agent_graph(cfg, dataset):
             #TODO: pretrain?
             if cfg['multi_agents']['fix_decoder']:
                 agent_i.load_decoder(load_path=cfg['data']['load_path'])
+            # if i == 0:
+            #     agent_i.fix_decoder = True
+            # else:
+            #     agent_i.fix_decoder = False
+            print(f'agent_{i} fix decoder: {agent_i.fix_decoder}')
             attrs = {i:{"agent": agent_i}}
             nx.set_node_attributes(G, attrs)
+
+            
+                
         nx.set_edge_attributes(G, 1, "weight")
     else:
         G = nx.Graph()
