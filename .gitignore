@@ -176,5 +176,5 @@ eval_data/
 # for local test code 
 test.ipynb
 
-*.mp4
+
 archive/
