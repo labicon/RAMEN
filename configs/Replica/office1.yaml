@@ -24,10 +24,10 @@ tracking:
 
 
 multi_agents:
-  num_agents: 2
+  num_agents: 3
   complete_graph: True
   #edges_list: [[0,1], [0,2], [1,2]]
-  edges_for_dropout: [ [0,1,0.9] ] # [node i, node j, possibility of dropping out]
+  edges_for_dropout: [ [0,1,0.5], [0,2,0.5], [1,2,0.5] ] # [node i, node j, possibility of dropping out]
   #edges_for_dropout: []
   distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
