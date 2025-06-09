@@ -7,7 +7,7 @@
 </p>
 
 <div align="center">
-	<a href='https://arxiv.org/abs/2502.19592'><img src='https://img.shields.io/badge/arXiv-2308.16246-b31b1b'></a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+	<a href='https://arxiv.org/abs/2502.19592'><img src='https://img.shields.io/badge/arXiv-2502.19592-b31b1b'></a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
  	<a href='https://iconlab.negarmehr.com/RAMEN/'><img src='https://img.shields.io/badge/Project-Page-Green'></a> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
  	<!-- <a href='https://www.youtube.com/watch?v=psPvanfh7SA&feature=youtu.be'><img src='https://img.shields.io/badge/Youtube-Video-blue'></a> -->
 </div>
