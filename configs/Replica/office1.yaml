@@ -15,11 +15,8 @@ data:
   datadir: data/Replica/office1
   trainskip: 1
   output: output/Replica/office1
-  exp_name: Ours_D50_4
-  #exp_name: DiNNO_D50_1
-  #exp_name: DSGD_D50_3
-  #exp_name: DSGT_D50_3
-  load_path: output/Apartment/apartment_centralized/agent_0/checkpoint12594.pt
+  exp_name: Test1
+  load_path: fixed_decoder.pt
 
 
 tracking:
@@ -32,10 +29,10 @@ multi_agents:
   #edges_list: [[0,1], [0,2], [1,2]]
   edges_for_dropout: [ [0,1,0.9] ] # [node i, node j, possibility of dropping out]
   #edges_for_dropout: []
-  distributed_algorithm: 'CADMM'
+  distributed_algorithm: 'AUQ_CADMM'
   rho: 0.0001
-  track_uncertainty: False
-  fix_decoder: False
+  track_uncertainty: True
+  fix_decoder: True
   #alpha: 0.15 # DSGD
   alpha: 0.02 # DSGT
 

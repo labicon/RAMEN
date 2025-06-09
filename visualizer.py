@@ -1,3 +1,4 @@
+import open3d as o3d # need to be imported first! otherwise initialization issue
 import argparse
 import os
 import glob
@@ -5,7 +6,6 @@ import time
 import numpy as np
 import torch
 import cv2
-import open3d as o3d
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from multiprocessing import Process, Queue
@@ -378,7 +378,7 @@ def process_uncertainty_file(file_path, cfg, N_l, params_in_level, vis_type, nei
 if __name__ == '__main__':
     """
         Black: ground truth 
-        python -W ignore .\visualizer_agents.py --config .\configs\Replica\office0_agents.yaml --agent 1
+        python -W ignore .\visualizer.py --config .\configs\Replica\office0_agents.yaml --agent 1
         -W ignore for ignoring warning
     """
     parser = argparse.ArgumentParser(
