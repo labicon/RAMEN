@@ -92,10 +92,13 @@ python main.py --config configs/Replica/office1.yaml
 ## Visualization and evaluation
 ### (1) Visualization
 ```shell
-python -W ignore visualizer.py --config ./configs/Replica/office1.yaml --agent 1
+python visualizer.py --config ./configs/Replica/office1.yaml 
 ```
 
+### (2) Evaluation
+Check out `analysis.ipynb`.
 
+ 
 ## Acknowledgement
 
 Our code is partially based on [Co-SLAM](https://github.com/HengyiWang/Co-SLAM). We thank the authors for making these codes publicly available.
