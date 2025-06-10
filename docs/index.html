@@ -46,6 +46,22 @@
 
   <!-- for google verification -->
   <meta name="google-site-verification" content="ofm0KCCgUiCsQrrKi3ncA0XphB-kfgnLMKo0vmzyGRk" />
+  
+  <style>
+    .rainbow-text {
+      background: linear-gradient(to right, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: rainbow-animation 5s linear infinite;
+      display: inline-block; /* Essential for the gradient to apply correctly */
+    }
+
+    @keyframes rainbow-animation {
+      to {
+        background-position: 200% center;
+      }
+    }
+  </style>
 </head>
 <body>
 
@@ -57,6 +73,9 @@
           <div class="column has-text-centered">
             <!-- Title here -->
             <h1 class="title is-1 publication-title">RAMEN: Real-time Asynchronous Multi-agent Neural Implicit Mapping</h1>
+            <h2 class="subtitle is-3 publication-title">
+              <span class="rainbow-text">Accepted by RSS 2025</span>
+            </h2>
             <div class="is-size-5 publication-authors">
               <!-- Paper authors -->
               <span class="author-block">Hongrui Zhao,</span>
