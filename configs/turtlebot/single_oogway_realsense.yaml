@@ -6,6 +6,7 @@ mapping:
   marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1]]
   keyframe_every: 1
   map_every: 1
+  filter_depth: True
   
 
 mesh: 
@@ -35,7 +36,7 @@ data:
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
-  exp_name: oogway_realsense_Jan14
+  exp_name: oogway_realsense_Jan15
   load_path: fixed_decoder.pt
 
 
