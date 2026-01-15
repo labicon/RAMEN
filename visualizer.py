@@ -456,7 +456,7 @@ if __name__ == '__main__':
                 # Display the image in a separate window for each agent
                 cv2.imshow(window_name, whole[:, :, ::-1])
             cv2.waitKey(1)
-        time.sleep(0.03) # don't delete this, otherwise loop will immediately ends before mesh and trajectories can be updated
+        time.sleep(0.1) # don't delete this, otherwise loop will immediately ends before mesh and trajectories can be updated
 
         meshfile = f'{ckptsdir_list[args.agent]}/mesh_track{i}.ply'
         if args.culled_mesh:
@@ -493,7 +493,7 @@ if __name__ == '__main__':
                     frontend.update_cam_trajectory(i, gt=True)
         
         if i == 1:
-            time.sleep(10) # sleep for the first frame
+            time.sleep(3) # sleep for the first frame
 
     if args.save_rendering:
         time.sleep(15)
