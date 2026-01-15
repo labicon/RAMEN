@@ -1,0 +1,66 @@
+inherit_from: configs/Replica/replica.yaml
+mapping:
+  bound:  [[-3,3],[-3,3],[-0.5,1]] #VICON ROOM
+  marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1]]
+  keyframe_every: 1
+  map_every: 1
+  filter_depth: True # 0 < depth < depth_trunc
+  iters: 10 # global BA iters, defaul 10
+  first_iters: 200 # default 200 
+  sample: 2048 # how many rays to sample from database. default 2-48
+  
+
+mesh: 
+  render_color: True
+  vis: 50
+
+grid:
+  enc: 'HashGrid'
+  tcnn_encoding: True
+  hash_size: 16
+  voxel_color: 0.05 # default 0.08
+  voxel_sdf: 0.02 # default 0.02
+  oneGrid: True
+
+
+cam: 
+  H: 360
+  W: 640
+
+  miriel: 
+  fx: 500.20556666666664 
+  fy: 500.1016433333333 
+  cx: 324.2802733333333 
+  cy: 186.87980166666665
+
+  crop_edge: 0
+  near: 0
+  far: 5
+  depth_trunc: 10. 
+  png_depth_scale: 6553.5
+
+
+data:
+  datadir: data/Replica/single_miriel_sep8_nmrf
+  trainskip: 1
+  output: output/Replica/single_miriel_sep8_nmrf
+  exp_name: cdm
+  load_path: fixed_decoder.pt
+  sc_factor: 1.
+
+
+tracking:
+  gt_pose: True
+
+
+multi_agents:
+  num_agents: 1
+  complete_graph: True
+  edges_for_dropout: []
+  distributed_algorithm: 'CADMM'
+  rho: 0.0001
+  track_uncertainty: True
+  fix_decoder: False
+  #alpha: 0.15 # DSGD
+  alpha: 0.02 # DSGT
+
