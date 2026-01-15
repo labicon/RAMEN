@@ -10,20 +10,19 @@ mapping:
 
 mesh: 
   render_color: True
-  vis: 200
-  voxel: 0.05
+  vis: 25
+  voxel: 0.025
 
 
 cam: 
-  H: 360
+  H: 480
   W: 640
   
   # oogway
-  fx: 498.37325
-  fy: 498.37325
-  cx: 327.03568499999994
-  cy: 181.04722166666664
-
+  fx: 607.9012451171875
+  fy: 607.8734741210938 
+  cx: 330.3504638671875
+  cy: 248.0792694091797
   crop_edge: 0
   near: 0
   far: 5
@@ -32,11 +31,11 @@ cam:
 
 
 data:
-  num_frames: 6000
+  num_frames: 1000 
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
-  exp_name: change_oogway
+  exp_name: oogway_realsense_Jan14
   load_path: fixed_decoder.pt
 
 

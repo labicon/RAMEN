@@ -1,0 +1,55 @@
+inherit_from: configs/Replica/replica.yaml
+mapping:
+  bound: [[-3.93,5.80],[-0.50,6.48],[-6.41,7.68]]
+  marching_cubes_bound: [[-3.83,5.70],[-0.40,6.38],[-6.31,7.58]]
+  keyframe_every: 5
+  map_every: 5
+  
+
+mesh: 
+  render_color: True
+  vis: 50  
+
+cam:
+  H: 480
+  W: 640
+  fx: 320.000000
+  fy: 320.000000
+  cx: 319.500000
+  cy: 239.500000
+  png_depth_scale: 1000.000000
+  crop_edge: 0
+  near: 0.001000
+  far: 10.000000
+  depth_trunc: 10.000000
+
+
+
+
+data:
+  datadir: data/Replica/apt1
+  trainskip: 1
+  output: output/Replica/apt1
+  exp_name: Test1
+  load_path: fixed_decoder.pt
+
+
+tracking:
+  gt_pose: True
+
+
+multi_agents:
+  num_agents: 1
+  complete_graph: True
+  #edges_list: [[0,1], [0,2], [1,2]]
+  #edges_for_dropout: [ [0,1,0.5], [0,2,0.5], [1,2,0.5] ] # [node i, node j, possibility of dropping out]
+  edges_for_dropout: []
+  distributed_algorithm: 'AUQ_CADMM'
+  rho: 0.0001
+  track_uncertainty: True
+  fix_decoder: True
+  #alpha: 0.15 # DSGD
+  alpha: 0.02 # DSGT
+
+edge_based: True
+

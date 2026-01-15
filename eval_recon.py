@@ -49,6 +49,11 @@ def completion(gt_points, rec_points):
     comp = np.mean(distances)
     return comp
 
+def precision_ratio(gt_points, rec_points, dist_th=0.05):
+    gt_points_kd_tree = KDTree(gt_points)
+    distances, _ = gt_points_kd_tree.query(rec_points)
+    prec_ratio = np.mean((distances < dist_th).astype(np.float32))
+    return prec_ratio
 
 def get_align_transformation(rec_meshfile, gt_meshfile):
     """
@@ -74,7 +79,6 @@ def get_align_transformation(rec_meshfile, gt_meshfile):
 def check_proj(points, W, H, fx, fy, cx, cy, c2w):
     """
     Check if points can be projected into the camera view.
-
     """
     c2w = c2w.copy()
     c2w[:3, 1] *= -1.0
@@ -115,17 +119,27 @@ def calc_3d_mesh_metric(mesh_rec, mesh_gt, align=False):
     completion_rec = completion(gt_pc_tri.vertices, rec_pc_tri.vertices)
     completion_ratio_rec = completion_ratio(
         gt_pc_tri.vertices, rec_pc_tri.vertices)
+    precision_ratio_rec = precision_ratio(
+        gt_pc_tri.vertices, rec_pc_tri.vertices)
+        
     accuracy_rec *= 100  # convert to cm
     completion_rec *= 100  # convert to cm
     completion_ratio_rec *= 100  # convert to %
+    precision_ratio_rec *= 100  # convert to %
+    
+    chamfer_dist = (accuracy_rec + completion_rec) / 2
+    
+    if completion_ratio_rec + precision_ratio_rec > 0:
+        f1_score = 2 * completion_ratio_rec * precision_ratio_rec / (completion_ratio_rec + precision_ratio_rec)
+    else:
+        f1_score = 0.0
 
-    return {'acc': accuracy_rec, 'comp': completion_rec, 'comp%': completion_ratio_rec}
+    return {'acc': accuracy_rec, 'comp': completion_rec, 'comp%': completion_ratio_rec, 'CD': chamfer_dist, 'precision': precision_ratio_rec, 'f1': f1_score}
 
 
 def calc_3d_metric(rec_meshfile, gt_meshfile, align=True):
     """
     3D reconstruction metric.
-
     """
     mesh_rec = trimesh.load(rec_meshfile, process=False)
     mesh_gt = trimesh.load(gt_meshfile, process=False)
@@ -143,17 +157,34 @@ def calc_3d_metric(rec_meshfile, gt_meshfile, align=True):
     completion_rec = completion(gt_pc_tri.vertices, rec_pc_tri.vertices)
     completion_ratio_rec = completion_ratio(
         gt_pc_tri.vertices, rec_pc_tri.vertices)
+    precision_ratio_rec = precision_ratio(
+        gt_pc_tri.vertices, rec_pc_tri.vertices)
+        
     accuracy_rec *= 100  # convert to cm
     completion_rec *= 100  # convert to cm
     completion_ratio_rec *= 100  # convert to %
+    precision_ratio_rec *= 100  # convert to %
+    
+    chamfer_dist = (accuracy_rec + completion_rec) / 2
+    
+    if completion_ratio_rec + precision_ratio_rec > 0:
+        f1_score = 2 * completion_ratio_rec * precision_ratio_rec / (completion_ratio_rec + precision_ratio_rec)
+    else:
+        f1_score = 0.0
     print('accuracy: {:.2f}'.format(accuracy_rec) )
     print('completion: {:.2f}'.format(completion_rec) )
     print('completion ratio: {:.2f}'.format(completion_ratio_rec) )
+    print('CD: {:.2f}'.format(chamfer_dist))
+    print('precision@5cm: {:.2f}'.format(precision_ratio_rec))
+    print('F1@5cm: {:.2f}'.format(f1_score))
 
     return{
         'acc': accuracy_rec,
         'comp': completion_rec,
-        'comp ratio': completion_ratio_rec
+        'comp ratio': completion_ratio_rec,
+        'CD': chamfer_dist,
+        'precision': precision_ratio_rec,
+        'f1': f1_score
     }
 
 
@@ -171,14 +202,42 @@ def get_cam_position(gt_meshfile, sx=0.3, sy=0.6, sz=0.6, dx=0.0, dy=0.0, dz=0.0
     transform[2, 3] += dz
     return extents, transform
 
-
-def calc_2d_metric(rec_meshfile, gt_meshfile, unseen_gt_pcd_file,
+#------------------------------------------------------
+def render_depth_offscreen(mesh, width, height, fx, fy, cx, cy, c2w):
+    """
+    use OffscreenRenderer to render depth map of a mesh
+    """
+    renderer = o3d.visualization.rendering.OffscreenRenderer(width, height)
+    
+    # set the background color
+    material = o3d.visualization.rendering.MaterialRecord()
+    material.shader = "defaultLit"
+    
+    renderer.scene.add_geometry("mesh", mesh, material)
+    
+    # set the camera intrinsic parameters
+    renderer.scene.camera.set_projection(
+        fx, fy, cx, cy, 0.1, 20.0, width, height
+    )
+    
+    # set the camera extrinsic parameters
+    w2c = np.linalg.inv(c2w)
+    renderer.scene.camera.look_at([0, 0, 0], [0, 0, 1], [0, 1, 0])  
+    renderer.scene.camera.set_model_matrix(np.linalg.inv(w2c))  
+    
+    # render the depth image
+    depth_image = renderer.render_to_depth_image()
+    depth_array = np.asarray(depth_image)
+    
+    return depth_array
+#------------------------------------------------------
+    """def calc_2d_metric(rec_meshfile, gt_meshfile, unseen_gt_pcd_file,
                    pose_file=None, gt_depth_render_file=None,
                    depth_render_file=None, suffix="virt_cams", align=True,
                    n_imgs=1000, not_counting_missing_depth=True,
                    sx=0.3, sy=0.6, sz=0.6, dx=0.0, dy=0.0, dz=0.0):
     """
-    2D reconstruction metric, depth L1 loss. modified from NICE-SLAM
+    """ 2D reconstruction metric, depth L1 loss. modified from NICE-SLAM
     :param rec_meshfile: path to culled reconstructed mesh .ply
     :param gt_meshfile: path to culled GT mesh .ply
     :param unseen_gt_pcd_file: path to unseen pointcloud file .npy
@@ -195,7 +254,7 @@ def calc_2d_metric(rec_meshfile, gt_meshfile, unseen_gt_pcd_file,
     :param dx: offset_x
     :param dy: offset_y
     :param dz: offset_z
-    :return:
+    :return:"""
     """
     H = 500
     W = 500
@@ -339,7 +398,134 @@ def calc_2d_metric(rec_meshfile, gt_meshfile, unseen_gt_pcd_file,
     # from m to cm
     print('Depth L1: ', errors.mean() * 100)
     return {"Depth L1": errors.mean() * 100}
+"""
 
+def calc_2d_metric(rec_meshfile, gt_meshfile, unseen_gt_pcd_file,
+                   pose_file=None, gt_depth_render_file=None,
+                   depth_render_file=None, suffix="virt_cams", align=True,
+                   n_imgs=1000, not_counting_missing_depth=True,
+                   sx=0.3, sy=0.6, sz=0.6, dx=0.0, dy=0.0, dz=0.0):
+    """
+    2D reconstruction metric, depth L1 loss. modified from NICE-SLAM
+    use OffscreenRenderer to render depth maps
+    """
+    H = 500
+    W = 500
+    focal = 300
+    fx = focal
+    fy = focal
+    cx = H/2.0-0.5
+    cy = W/2.0-0.5
+
+    gt_mesh = o3d.io.read_triangle_mesh(gt_meshfile)
+    rec_mesh = o3d.io.read_triangle_mesh(rec_meshfile)
+    pc_unseen = np.load(unseen_gt_pcd_file)
+
+    if pose_file and os.path.exists(pose_file):
+        sampled_poses = np.load(pose_file)["poses"]
+        assert len(sampled_poses) == n_imgs
+        print("Found saved rendering poses! Loading from disk!!!")
+    else:
+        sampled_poses = None
+        print("Saved rendering poses NOT FOUND! Will do the sampling")
+    if gt_depth_render_file and os.path.exists(gt_depth_render_file):
+        gt_depth_renderings = np.load(gt_depth_render_file)["depths"]
+        assert len(gt_depth_renderings) == n_imgs
+        print("Found saved rendered gt depths! Loading from disk!!!")
+    else:
+        gt_depth_renderings = None
+        print("Saved rendered gt depths NOT FOUND! Will re-render!!!")
+    if depth_render_file and os.path.exists(depth_render_file):
+        depth_renderings = np.load(depth_render_file)["depths"]
+        assert len(depth_renderings) == n_imgs
+        print("Found saved rendered reconstructed depth! Loading from disk!!!")
+    else:
+        depth_renderings = None
+        print("Saved rendered reconstructed depth NOT FOUND! Will re-render!!!")
+
+    gt_dir = os.path.dirname(unseen_gt_pcd_file)
+    log_dir = os.path.dirname(rec_meshfile)
+
+    if align:
+        transformation = get_align_transformation(rec_meshfile, gt_meshfile)
+        rec_mesh = rec_mesh.transform(transformation)
+
+    # get vacant area inside the room
+    extents, transform = get_cam_position(gt_meshfile, sx=sx, sy=sy, sz=sz, dx=dx, dy=dy, dz=dz)
+
+    errors = []
+    poses = []
+    gt_depths = []
+    depths = []
+    
+    for i in trange(n_imgs, smoothing=0):
+        if sampled_poses is None:
+            while True:
+                # sample view, and check if unseen region is not inside the camera view
+                # if inside, then needs to resample
+                # camera-up (Y-direction) vector under world
+                up = [0, 0, -1]
+                # camera origin coord under world coordinate-frame, sampled within extents of the oriented bound
+                origin = trimesh.sample.volume_rectangular(extents, 1, transform=transform)
+                origin = origin.reshape(-1)
+                # sampled target coord under world [tx, ty, tz]
+                tx = round(random.uniform(-10000, +10000), 2)
+                ty = round(random.uniform(-10000, +10000), 2)
+                tz = round(random.uniform(-10000, +10000), 2)
+                target = [tx, ty, tz]
+                # look_at vector (camera-Z), from origin to target
+                target = np.array(target)-np.array(origin)
+                c2w = viewmatrix(target, up, origin)
+                tmp = np.eye(4)
+                tmp[:3, :] = c2w
+                c2w = tmp
+                seen = check_proj(pc_unseen, W, H, fx, fy, cx, cy, c2w)
+                if (~seen):
+                    break
+            poses.append(c2w)
+        else:
+            c2w = sampled_poses[i]
+
+        # use OffscreenRenderer to render depth maps
+        if gt_depth_renderings is None:
+            gt_depth = render_depth_offscreen(gt_mesh, W, H, fx, fy, cx, cy, c2w)
+            gt_depths.append(gt_depth)
+        else:
+            gt_depth = gt_depth_renderings[i]
+        
+        if depth_renderings is None:
+            ours_depth = render_depth_offscreen(rec_mesh, W, H, fx, fy, cx, cy, c2w)
+            depths.append(ours_depth)
+        else:
+            ours_depth = depth_renderings[i]
+
+        if not_counting_missing_depth:
+            valid_mask = (gt_depth > 0.) & (gt_depth < 19.)
+            if np.count_nonzero(valid_mask) <= 100:
+                continue
+            errors += [np.abs(gt_depth[valid_mask] - ours_depth[valid_mask]).mean()]
+        else:
+            errors += [np.abs(gt_depth-ours_depth).mean()]
+
+    if pose_file is None:
+        np.savez(os.path.join(gt_dir, "sampled_poses_{}.npz".format(n_imgs)), poses=poses)
+    elif not os.path.exists(pose_file):
+        np.savez(pose_file, poses=poses)
+
+    if gt_depth_render_file is None:
+        np.savez(os.path.join(gt_dir, "gt_depths_{}.npz".format(n_imgs)), depths=gt_depths)
+    elif not os.path.exists(gt_depth_render_file):
+        np.savez(gt_depth_render_file, depths=gt_depths)
+
+    if depth_render_file is None:
+        np.savez(os.path.join(log_dir, "depths_{}_{}.npz".format(suffix, n_imgs)), depths=depths)
+    elif not os.path.exists(depth_render_file):
+        np.savez(depth_render_file, depths=depths)
+
+    errors = np.array(errors)
+    # from m to cm
+    print('Depth L1: ', errors.mean() * 100)
+    return {"Depth L1": errors.mean() * 100}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
