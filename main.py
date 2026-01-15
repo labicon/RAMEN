@@ -1,5 +1,6 @@
 import os
 #os.environ['TCNN_CUDA_ARCHITECTURES'] = '86'
+import shutil
 
 # Package imports
 import torch
@@ -9,7 +10,11 @@ import random
 import torch.nn.functional as F
 import argparse
 import json
+import copy
 import shutil 
+
+from torch.utils.tensorboard import SummaryWriter
+
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
@@ -47,14 +52,25 @@ class Mapping():
         self.model = JointEncoding(config, self.bounding_box).to(self.device)
         self.fix_decoder = config['multi_agents']['fix_decoder']
         self.create_optimizer()
+
+
+        # add tf for every agent
+        log_dir = os.path.join(self.config['data']['output'], self.config['data']['exp_name'], f'agent_{self.agent_id}', 'logs')
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+        self.writer = SummaryWriter(log_dir=log_dir)
+        print(f"Agent {self.agent_id} TensorBoard logs will be saved to: {log_dir}")
+
       
         self.dist_algorithm = config['multi_agents']['distributed_algorithm']
         self.track_uncertainty = config['multi_agents']['track_uncertainty']
-        if self.track_uncertainty:
-            self.uncertainty_tensor = torch.zeros(self.model.embed_fn.params.size()).to(self.device)
-            self.W_i = torch.zeros(self.uncertainty_tensor.size()).to(self.device) 
 
-        # save loss 
+        
+        if self.track_uncertainty:
+            embed_fn_params_vec = p2v(self.model.embed_fn.parameters())
+            self.uncertainty_tensor = torch.zeros(embed_fn_params_vec.size()).to(self.device)
+            self.W_i = torch.zeros(self.uncertainty_tensor.size()).to(self.device)
+           
         self.total_loss = []
         self.obj_loss = []
         self.lag_loss = []
@@ -62,7 +78,12 @@ class Mapping():
 
         # initialize dual variable 
         theta_i = p2v(self.model.parameters())
-        self.p_i = torch.zeros(theta_i.size()).to(self.device)
+        if self.config['edge_based'] == False:
+            self.p_i = torch.zeros(theta_i.size()).to(self.device) # combination of dual variables
+        else:
+            theta_i_size = p2v(self.model.parameters()).size()
+            # Change p_i to a dictionary p_ij to store dual variables per edge 
+            self.p_ij = {} # Key: neighbor_id, Value: dual variable tensor
         # a list to hold neighbor model parameters, and uncertainty tensor (optional)
         self.neighbors = []
         # step size in the gradient ascent of the dual variable
@@ -254,9 +275,24 @@ class Mapping():
             loss.backward()
 
             if self.track_uncertainty:
-                grid_grad = self.model.embed_fn.params.grad
-                grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
-                self.uncertainty_tensor += grid_has_grad
+                if self.config['grid']['enc'] == 'tensor':
+                    # For TensorCP, iterate through its parameters to get gradients
+                    grads = []
+                    for p in self.model.embed_fn.parameters():
+                        if p.grad is not None:
+                            grads.append(p.grad.view(-1))
+                    if grads:
+                        grid_grad = torch.cat(grads)
+                    else:
+                        grid_grad = torch.tensor([], device=self.device)
+                else:
+                    # Original code for tcnn encoders
+                    grid_grad = self.model.embed_fn.params.grad
+                
+                if grid_grad is not None and grid_grad.numel() > 0:
+                    grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
+                    self.uncertainty_tensor += grid_has_grad
+
 
             self.map_optimizer.step()
 
@@ -306,28 +342,40 @@ class Mapping():
         q = a_1 - p*torch.min(uncertainty)
         return p, q
 
-
     def communicate(self,input):
-        model_j = input[0]
-        theta_j = p2v(model_j.parameters()).detach()
-
         if self.dist_algorithm == 'AUQ_CADMM':
-            uncertainty_j = input[1].detach()
-            step = input[2]
-            self.neighbors.append( [theta_j, uncertainty_j] )
+            if self.config['edge_based'] == True:
+                neighbor_id = input[0]
+                model_j = input[1]
+                uncertainty_j = input[2]
+                theta_j = p2v(model_j.parameters()).detach()
+                # The list now acts as a collection of "flags" for successful communication
+                # It stores [neighbor_id, theta_j, uncertainty_j]
+                self.neighbors.append( [neighbor_id, theta_j, uncertainty_j] )
+            else:
+                model_j = input[0]  
+                theta_j = p2v(model_j.parameters()).detach()
+                uncertainty_j = input[1].detach()
+                step = input[2]
+                self.neighbors.append( [theta_j, uncertainty_j] )
 
         elif self.dist_algorithm in ('CADMM', 'MACIM'):
+            model_j = input[0]  
+            theta_j = p2v(model_j.parameters()).detach()
             self.neighbors.append( [theta_j] )
 
         elif self.dist_algorithm == 'DSGD':
+            model_j = input[0]  
+            
             j = input[1]
             self.neighbors.append( [model_j.parameters(), j] )
 
         elif self.dist_algorithm == 'DSGT':
+            model_j = input[0]  
+            
             y_dsgt_j = input[1]
             j = input[2]
             self.neighbors.append( [model_j.parameters(), y_dsgt_j, j] )
-
 
     def dual_update(self, theta_i_k):
         for neighbor in self.neighbors:
@@ -337,15 +385,39 @@ class Mapping():
 
     def dual_update_AUQ_CADMM(self, theta_i_k, uncertainty_i, k):
         padding_size = theta_i_k.size(0) - uncertainty_i.size(0)
-        for neighbor in self.neighbors:
-            theta_j_k = neighbor[0]
-            uncertainty_j = neighbor[1]
-            p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
-            W_i = p*uncertainty_i + q
-            W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
-            W_j = p*uncertainty_j + q
-            W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
-            self.p_i +=  2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, W_i + W_j)
+        if self.config['edge_based'] == True:
+            for neighbor in self.neighbors:
+                neighbor_id = neighbor[0]
+                theta_j_k = neighbor[1]
+                uncertainty_j = neighbor[2]
+                
+                p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+                W_i = p*uncertainty_i + q
+                W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
+                W_j = p*uncertainty_j + q
+                W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho)
+                
+                denominator = W_i + W_j
+                epsilon = 1e-8
+                update_term = 2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, denominator + epsilon)
+                
+                # Update the specific dual variable for this neighbor
+                self.p_ij[neighbor_id] += update_term
+        else:
+            for neighbor in self.neighbors:
+                theta_j_k = neighbor[0]
+                uncertainty_j = neighbor[1]
+                p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+                W_i = p*uncertainty_i + q
+                W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
+                W_j = p*uncertainty_j + q
+                W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho)
+
+                denominator = W_i + W_j
+                epsilon = 1e-8
+                update_term = 2*W_i * torch.div( W_j*theta_i_k - W_j*theta_j_k, denominator + epsilon)
+                self.p_i += update_term
+
 
 
     def primal_update(self, theta_i_k, loss):
@@ -361,24 +433,63 @@ class Mapping():
 
     def primal_update_AUQ_CADMM(self, theta_i_k, loss, uncertainty_i, k):
         theta_i = p2v(self.model.parameters())
-        lag_loss = torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+        #  Both lag_loss and aug_loss are accumulated inside the loop
+        
         aug_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
         padding_size = theta_i.size(0) - uncertainty_i.size(0)
-        for neighbor in self.neighbors:
-            theta_j_k = neighbor[0]     
-            uncertainty_j = neighbor[1]
-            p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
-            W_i = p*uncertainty_i + q
-            W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
-            W_j = p*uncertainty_j + q
-            W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
-            difference = theta_i - torch.div( W_i*theta_i_k + W_j*theta_j_k, W_i + W_j)
-            weighted_norm = torch.dot(difference*W_i, difference)
-            aug_loss += weighted_norm
+        
+        if self.config['edge_based'] == True:
+            lag_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
+            # The loop now iterates only over neighbors with a success "flag"
+            for neighbor in self.neighbors:
+                neighbor_id = neighbor[0]
+                theta_j_k = neighbor[1]
+                uncertainty_j = neighbor[2]
+
+                # Add the lagrangian term for this specific neighbor
+                lag_loss += torch.dot(theta_i, self.p_ij[neighbor_id])
+
+                p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+                W_i = p*uncertainty_i + q
+                W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
+                W_j = p*uncertainty_j + q
+                W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
+                
+                denominator = W_i + W_j
+                epsilon = 1e-8
+                consensus_theta = torch.div( W_i*theta_i_k + W_j*theta_j_k, denominator + epsilon)
+                difference = theta_i - consensus_theta
+                
+                W_i_clamped = torch.clamp(W_i, min=0.)
+                weighted_norm = torch.dot(difference*W_i_clamped, difference)
+                
+                # Add the augmented term for this specific neighbor
+                aug_loss += weighted_norm
+        else:
+            lag_loss = torch.dot(theta_i, self.p_i) #TODO: uncomment? comment?
+            aug_loss = torch.tensor(0, dtype=torch.float64).to(self.device)
+            padding_size = theta_i.size(0) - uncertainty_i.size(0)
+            for neighbor in self.neighbors:
+                theta_j_k = neighbor[0]     
+                uncertainty_j = neighbor[1]
+                p, q = self.scaling_AUQ_CADMM(k, uncertainty_i, uncertainty_j)
+                W_i = p*uncertainty_i + q
+                W_i = torch.nn.functional.pad(W_i, (0,padding_size), "constant", self.rho) 
+                W_j = p*uncertainty_j + q
+                W_j = torch.nn.functional.pad(W_j, (0,padding_size), "constant", self.rho) 
+                denominator = W_i + W_j
+                epsilon = 1e-8
+                consensus_theta = torch.div( W_i*theta_i_k + W_j*theta_j_k, denominator + epsilon)
+                difference = theta_i - consensus_theta
+                
+                W_i_clamped = torch.clamp(W_i, min=0.)
+                weighted_norm = torch.dot(difference*W_i_clamped, difference)
+                aug_loss += weighted_norm
         loss += lag_loss + aug_loss
         return loss, lag_loss.item(), aug_loss.item()
 
-
+    # MACIM loss function, serve as a regularization term
+    # It is not used in the paper
     def MACIM_cc_loss(self, loss):
         theta_i = p2v(self.model.parameters())
         for neighbor in self.neighbors:
@@ -386,7 +497,6 @@ class Mapping():
             difference = self.rho * torch.norm(theta_i - theta_j)**2
             loss += difference
         return loss
-
 
     def DSGD_update(self):
         rid = self.agent_id
@@ -493,9 +603,38 @@ class Mapping():
             mean_obj_loss += loss.item() #item() method extracts the loss’s value as a Python float.
 
             if self.track_uncertainty:
-                grid_grad = self.model.embed_fn.params.grad
-                grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
-                self.uncertainty_tensor += grid_has_grad
+                if self.config['grid']['enc'] == 'tensor':
+                    # For TensorCP, iterate through its parameters to get gradients
+                    grads = []
+                    for p in self.model.embed_fn.parameters():
+                        if p.grad is not None:
+                            grads.append(p.grad.view(-1))
+                    if grads:
+                        grid_grad = torch.cat(grads)
+                    else:
+                        grid_grad = torch.tensor([], device=self.device)
+                else:
+                    # Original code for tcnn encoders
+                    grid_grad = self.model.embed_fn.params.grad
+                
+                if grid_grad is not None and grid_grad.numel() > 0:
+                    grid_has_grad = (torch.abs(grid_grad) > 0).to(torch.int32)
+                    self.uncertainty_tensor += grid_has_grad
+                    #set tf 
+                    if len(self.keyframeDatabase.frame_ids) > 0:
+                        current_step = self.keyframeDatabase.frame_ids[-1]
+                        
+                        uncert_log = self.uncertainty_tensor.detach().cpu().float()
+
+                        self.writer.add_scalar('Uncertainty/Mean', uncert_log.mean(), current_step)
+                        self.writer.add_scalar('Uncertainty/Std', uncert_log.std(), current_step)
+                        self.writer.add_scalar('Uncertainty/Max', uncert_log.max(), current_step)
+                        self.writer.add_scalar('Uncertainty/Min', uncert_log.min(), current_step)
+                    else:
+                        print("no frame ids in keyframe database, cannot log uncertainty")
+
+
+
 
             if dist_algorithm == 'CADMM':
                 loss, lag_loss, aug_loss = self.primal_update(theta_i_k, loss)
@@ -537,6 +676,13 @@ class Mapping():
         self.obj_loss.append(mean_obj_loss)
         self.lag_loss.append(mean_lag_loss)
         self.aug_loss.append(mean_aug_loss)
+        # set tf
+        self.writer.add_scalar('Loss/Total', mean_total_loss, cur_frame_id)
+        self.writer.add_scalar('Loss/Objective', mean_obj_loss, cur_frame_id)
+        self.writer.add_scalar('Loss/Lagrangian', mean_lag_loss, cur_frame_id)
+        self.writer.add_scalar('Loss/Augmented', mean_aug_loss, cur_frame_id)
+
+
 
 
     def tracking_render(self, batch, frame_id):
@@ -615,9 +761,8 @@ class Mapping():
             self.save_mesh(i, voxel_size=self.config['mesh']['voxel_final'])
         
 
-
-
 def create_agent_graph(cfg, dataset):
+
     """
         @param cfg:
         @param dataset:
@@ -628,35 +773,48 @@ def create_agent_graph(cfg, dataset):
     frames_per_agent = len(dataset) // num_agents
     dataset_info = {'num_frames':frames_per_agent, 'num_rays_to_save':dataset.num_rays_to_save, 'H':dataset.H, 'W':dataset.W }
     
+    # Use first agent as model
+    print(f'\nCreating agent 0 (template)')
+    agent_template = Mapping(cfg, 0, dataset_info)
+    if cfg['multi_agents']['fix_decoder']:
+        agent_template.load_decoder(load_path=cfg['data']['load_path'])
+    print(f'agent_0 fix decoder: {agent_template.fix_decoder}')
+
+    # Temporarily remove non-copyable writer attribute
+    writer_template = agent_template.writer
+    agent_template.writer = None
+
+    agents = [agent_template]
+
+    # deep copy every agent
+    for i in range(1, num_agents):
+        print(f'\nCreating agent {i} by copying template')
+        agent_i = copy.deepcopy(agent_template)
+        agent_i.agent_id = i # 必须更新每个智能体的ID
+        print(f'agent_{i} fix decoder: {agent_i.fix_decoder}')
+        agents.append(agent_i)
+
+    agent_template.writer = writer_template 
+    for i in range(1, num_agents):
+        agent_i = agents[i]
+        log_dir = os.path.join(cfg['data']['output'], cfg['data']['exp_name'], f'agent_{agent_i.agent_id}', 'logs')
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+        agent_i.writer = SummaryWriter(log_dir=log_dir)
+        print(f"Agent {agent_i.agent_id} TensorBoard logs will be saved to: {log_dir}")
+
     if cfg['multi_agents']['complete_graph']:
         G = nx.complete_graph(num_agents)
         for i in range(num_agents):
-            print(f'\nCreating agnet {i}')
-            agent_i = Mapping(cfg, i, dataset_info)
-            #TODO: pretrain?
-            if cfg['multi_agents']['fix_decoder']:
-                agent_i.load_decoder(load_path=cfg['data']['load_path'])
-            # if i == 0:
-            #     agent_i.fix_decoder = True
-            # else:
-            #     agent_i.fix_decoder = False
-            print(f'agent_{i} fix decoder: {agent_i.fix_decoder}')
-            attrs = {i:{"agent": agent_i}}
-            nx.set_node_attributes(G, attrs)
-
-            
-                
+        
+            attrs = {i:{"agent": agents[i]}}
+            nx.set_node_attributes(G, attrs) 
         nx.set_edge_attributes(G, 1, "weight")
     else:
         G = nx.Graph()
         node_list = []
         for i in range(num_agents):
-            print(f'\nCreating agnet {i}')
-            agent_i = Mapping(cfg, i, dataset_info)
-            #TODO: pretrain?
-            if cfg['multi_agents']['fix_decoder']:
-                agent_i.load_decoder(load_path=cfg['data']['load_path'])
-            node_list.append( [ i, {"agent": agent_i} ] )
+            node_list.append( [ i, {"agent": agents[i]} ] )
         G.add_nodes_from(node_list) 
         G.add_edges_from(cfg['multi_agents']['edges_list'], weight=1)
 
@@ -676,12 +834,26 @@ def create_agent_graph(cfg, dataset):
     for i in range(N):
         W[i, i] = 1.0 - torch.sum(W[i, :])
 
-    for i, nbrs in G.adj.items():
-        agent_i = G.nodes[i]['agent']
-        agent_i.ds_mat = W
+    if cfg['edge_based']:
+        theta_i_size = None
+        if G.number_of_nodes() > 0:
+
+            some_agent = G.nodes[0]['agent']
+            theta_i_size = p2v(some_agent.model.parameters()).size()
+
+        for i, nbrs in G.adj.items():
+            agent_i = G.nodes[i]['agent']
+            agent_i.ds_mat = W
+            if theta_i_size is not None:
+                for j in nbrs:
+                
+                    agent_i.p_ij[j] = torch.zeros(theta_i_size).to(agent_i.device)
+    else:
+        for i, nbrs in G.adj.items():
+            agent_i = G.nodes[i]['agent']
+            agent_i.ds_mat = W
 
     return G, frames_per_agent
-
 
 def get_data_memory(dataset, cfg, frames_per_agent):
     num_agents = cfg['multi_agents']['num_agents']
@@ -700,9 +872,12 @@ def get_data_memory(dataset, cfg, frames_per_agent):
         file.write(total_size)
 
 
-def get_model_memory(model, fix_decoder=False):
+def get_model_memory(model, fix_decoder=False, grid_enc_type='tcnn'):
     if fix_decoder:
-        model_tensor = model.embed_fn.params
+        if grid_enc_type == 'tensor':
+            model_tensor = p2v(model.embed_fn.parameters())
+        else:  
+            model_tensor = model.embed_fn.params
     else:
         model_tensor = p2v(model.parameters())
     model_size = torch.numel(model_tensor)*model_tensor.element_size() / 1e6 # bytes to megabytes
@@ -743,22 +918,26 @@ def train_multi_agent(cfg):
                     # send data 
                     if edge_attr['weight'] == 1:
                         agent_j = G.nodes[j]['agent']
+                        grid_enc_type = cfg['grid']['enc']
                         if cfg['multi_agents']['distributed_algorithm'] == 'AUQ_CADMM':
-                            agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor, step])
-                            model_size = get_model_memory(agent_j.model, fix_decoder)*2
+                            if cfg['edge_based']:
+                                agent_i.communicate([j, agent_j.model, agent_j.uncertainty_tensor])
+                                model_size = get_model_memory(agent_j.model, fix_decoder, grid_enc_type)*2
+                            else:
+                                agent_i.communicate([agent_j.model, agent_j.uncertainty_tensor, step])
+                                model_size = get_model_memory(agent_j.model, fix_decoder, grid_enc_type)*2
 
                         elif cfg['multi_agents']['distributed_algorithm'] in ('CADMM', 'MACIM'):
                             agent_i.communicate([agent_j.model],)
-                            model_size = get_model_memory(agent_j.model, fix_decoder)
+                            model_size = get_model_memory(agent_j.model, fix_decoder, grid_enc_type)
 
                         elif cfg['multi_agents']['distributed_algorithm'] == 'DSGD':
                             agent_i.communicate([agent_j.model, j])
-                            model_size = get_model_memory(agent_j.model, fix_decoder)
+                            model_size = get_model_memory(agent_j.model, fix_decoder, grid_enc_type)
 
                         elif cfg['multi_agents']['distributed_algorithm'] == 'DSGT':
                             agent_i.communicate([agent_j.model, agent_j.y_dsgt, j])
-                            model_size = get_model_memory(agent_j.model, fix_decoder)*2
-
+                            model_size = get_model_memory(agent_j.model, fix_decoder, grid_enc_type)*2
                         agent_i.com_perIter += model_size
                         agent_i.com_total += model_size
              
@@ -787,6 +966,11 @@ def train_multi_agent(cfg):
     with open(os.path.join(output_path, 'graph_data.json'), 'w') as f:
         json.dump(data_to_save, f, indent=4)     
     print("Agent Communication Info Saved")
+    
+    print("Closing TensorBoard writers...")
+    for i in G.nodes():
+        agent_i = G.nodes[i]['agent']
+        agent_i.writer.close()
 
 
 

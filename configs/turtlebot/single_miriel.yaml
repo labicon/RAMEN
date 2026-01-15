@@ -13,7 +13,7 @@ mapping:
 
 mesh: 
   render_color: True
-  vis: 25
+  vis: 100
   voxel: 0.05
 
 
@@ -30,16 +30,16 @@ cam:
   crop_edge: 0
   near: 0
   far: 5
-  depth_trunc: 10. # this is for calculating sdf loss. in m
+  depth_trunc: 100. # this is for calculating sdf loss. in m
   max_depth: 10000. # where I cut my depth pixel value
 
 
 data:
-  num_frames: 150 
+  num_frames: 6000
   downsample: 1
   sc_factor: 1
   output: output/turtlebot
-  exp_name: single_miriel_aug15
+  exp_name: change_miriel
   load_path: fixed_decoder.pt
 
 

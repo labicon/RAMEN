@@ -5,39 +5,43 @@ mapping:
   bound:  [[-3,3],[-3,3],[-0.5,1]] #VICON ROOM
   marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1]]
   keyframe_every: 1
-  map_every: 1
+  map_every: 5
+  filter_depth: True
+  iters: 10  # global BA iters, defaul 10
+  first_iters: 200 # default 200 
   
 
 mesh: 
   render_color: True
-  vis: 200
+  vis: 100
   voxel: 0.05
 
 
 cam: 
   H: 360
   W: 640
-  
-  # oogway
-  fx: 498.37325
-  fy: 498.37325
-  cx: 327.03568499999994
-  cy: 181.04722166666664
+
+  # miriel 
+  fx: 500.20556666666664 
+  fy: 500.1016433333333 
+  cx: 324.2802733333333 
+  cy: 186.87980166666665
 
   crop_edge: 0
   near: 0
   far: 5
-  depth_trunc: 100. # this is for calculating sdf loss
+  depth_trunc: 100. # this is for calculating sdf loss. in m
   max_depth: 10000. # where I cut my depth pixel value
 
 
 data:
-  num_frames: 6000
   downsample: 1
   sc_factor: 1
-  output: output/turtlebot
-  exp_name: change_oogway
+  output: output/Replica
+  exp_name: single_miriel_nov13
   load_path: fixed_decoder.pt
+  datadir: data/Replica/single_miriel_nov13
+  trainskip: 1
 
 
 training:
@@ -48,6 +52,7 @@ training:
   smooth_weight: 0.000001
 
 multi_agents:
+  num_agents: 1
   com_every: 1 
   distributed_algorithm: 'CADMM'
   rho:  0.0001 
@@ -55,4 +60,8 @@ multi_agents:
   fix_decoder: False
   #alpha: 0.15 # DSGD
   alpha: 0.02 # DSGT
+  complete_graph: True
+  edges_for_dropout: []
 
+tracking:
+  gt_pose: True

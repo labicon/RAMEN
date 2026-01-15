@@ -5,54 +5,67 @@ mapping:
   bound:  [[-3,3],[-3,3],[-0.5,1]] #VICON ROOM
   marching_cubes_bound:  [[-3,3],[-3,3],[-0.5,1]]
   keyframe_every: 1
-  map_every: 1
+  map_every: 5
+  filter_depth: True
+  iters: 20  # global BA iters, defaul 10
+  first_iters: 200 # default 200 
   
 
 mesh: 
   render_color: True
-  vis: 200
+  vis: 100
   voxel: 0.05
 
 
 cam: 
-  H: 360
+  H: 480
   W: 640
   
   # oogway
-  fx: 498.37325
-  fy: 498.37325
-  cx: 327.03568499999994
-  cy: 181.04722166666664
-
+  fx: 607.9012451171875
+  fy: 607.8734741210938 
+  cx: 330.3504638671875
+  cy: 248.0792694091797
+  crop_edge: 0
   crop_edge: 0
   near: 0
   far: 5
-  depth_trunc: 100. # this is for calculating sdf loss
+  depth_trunc: 100. # this is for calculating sdf loss. in m
   max_depth: 10000. # where I cut my depth pixel value
 
 
 data:
-  num_frames: 6000
   downsample: 1
   sc_factor: 1
-  output: output/turtlebot
-  exp_name: change_oogway
+  output: output/Replica
+  exp_name: realsense_Jan15_modPose_tune
   load_path: fixed_decoder.pt
+  datadir: data/Replica/oogway_realsense_Jan15
+  trainskip: 1
 
 
 training:
-  rgb_weight: 5.0
+  rgb_weight: 10.0 # 5.0
   depth_weight: 0.1
   sdf_weight: 1000
   fs_weight: 10 # 10 by default
-  smooth_weight: 0.000001
+  smooth_weight: 0.0000001 # 0.000001
 
 multi_agents:
+  num_agents: 1
   com_every: 1 
+  complete_graph: True
+  edges_for_dropout: []
   distributed_algorithm: 'CADMM'
   rho:  0.0001 
   track_uncertainty: True
   fix_decoder: False
   #alpha: 0.15 # DSGD
   alpha: 0.02 # DSGT
+  complete_graph: True
+  edges_for_dropout: []
 
+tracking:
+  gt_pose: True
+
+edge_based: False

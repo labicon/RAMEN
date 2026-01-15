@@ -92,7 +92,7 @@ def visualize_ply_dynamic(directory, show_uncertainty, cfg):
         bbox.color = (1, 0, 0)  # Red color
         vis.add_geometry(bbox)
 
-        wait_time = 0.5 # in case read before a file is ready
+        wait_time = 3.0 # in case read before a file is ready
         current_mesh_path = None
         current_ckpt_path = None
         current_uncertainty_path = None 

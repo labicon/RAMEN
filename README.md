@@ -106,8 +106,8 @@ Check out `analysis.ipynb`.
  
 ## Acknowledgement
 
-Our code is partially based on [Co-SLAM](https://github.com/HengyiWang/Co-SLAM). We thank the authors for making these codes publicly available.
-
+* Our code is partially based on [Co-SLAM](https://github.com/HengyiWang/Co-SLAM). We thank the authors for making these codes publicly available.
+* We would like to thank the NVIDIA academic grant for providing computation resources.
 ## Citation
 
 ```

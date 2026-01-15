@@ -734,44 +734,45 @@ def data_loading(redis_client, rays_d, step, com_every, agent_i, max_depth):
     return batch
 
 
+class save_scene_as_replica():
+    def __init__(self, cfg):
+        """
+        Save the collected batches as a new scene in Replica format.
+        """
+        exp_name = cfg['data']['exp_name']
+        scene_dir = os.path.join('data', 'Replica', exp_name)
+        self.results_dir = os.path.join(scene_dir, 'results')
+        os.makedirs(self.results_dir, exist_ok=True)
+
+        self.traj_path = os.path.join(scene_dir, 'traj.txt')
+        self.png_depth_scale = cfg['cam']['png_depth_scale']
+        self.sc_factor = cfg['data']['sc_factor']
+
+        print(f"Saving recorded scene to {scene_dir}...")
 
 
-def save_scene_as_replica(cfg, stored_batches):
-    """
-    Save the collected batches as a new scene in Replica format.
-    """
-    exp_name = cfg['data']['exp_name']
-    scene_dir = os.path.join('data', 'Replica', exp_name)
-    results_dir = os.path.join(scene_dir, 'results')
-    os.makedirs(results_dir, exist_ok=True)
-
-    traj_path = os.path.join(scene_dir, 'traj.txt')
-    png_depth_scale = cfg['cam']['png_depth_scale']
-    sc_factor = cfg['data']['sc_factor']
-
-    print(f"Saving recorded scene to {scene_dir}...")
-
-    with open(traj_path, 'w') as f:
-        for i, batch in enumerate(tqdm(stored_batches)):
+    def save_a_batch(self, i, batch):
+        mode = 'w' if i==0 else 'a'
+        with open(self.traj_path, mode) as f:
             # Save RGB image
             rgb_tensor = batch['rgb'].squeeze(0) # H, W, 3
             rgb_np = (rgb_tensor.cpu().numpy() * 255).astype(np.uint8)
             rgb_bgr = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2BGR)
-            rgb_path = os.path.join(results_dir, f'frame{i:06d}.jpg')
+            rgb_path = os.path.join(self.results_dir, f'frame{i:06d}.jpg')
             cv2.imwrite(rgb_path, rgb_bgr)
 
             # save stereo pairs 
             l_img = batch['l_img']
             r_img = batch['r_img']
-            limg_path = os.path.join(results_dir, f'limg{i:06d}.jpg')
-            rimg_path = os.path.join(results_dir, f'rimg{i:06d}.jpg')
+            limg_path = os.path.join(self.results_dir, f'limg{i:06d}.jpg')
+            rimg_path = os.path.join(self.results_dir, f'rimg{i:06d}.jpg')
             cv2.imwrite(limg_path, l_img)
             cv2.imwrite(rimg_path, r_img)
 
             # Save depth image
             depth_tensor = batch['depth'].squeeze(0) # H, W
-            depth_np = (depth_tensor.cpu().numpy() * png_depth_scale).astype(np.uint16)
-            depth_path = os.path.join(results_dir, f'depth{i:06d}.png')
+            depth_np = (depth_tensor.cpu().numpy() * self.png_depth_scale).astype(np.uint16)
+            depth_path = os.path.join(self.results_dir, f'depth{i:06d}.png')
             cv2.imwrite(depth_path, depth_np)
 
             # Save pose
@@ -779,11 +780,9 @@ def save_scene_as_replica(cfg, stored_batches):
             c2w_to_save = c2w.copy()
             c2w_to_save[:3, 1] *= -1
             c2w_to_save[:3, 2] *= -1
-            c2w_to_save[:3, 3] /= sc_factor
+            c2w_to_save[:3, 3] /= self.sc_factor
             
             f.write(' '.join(map(str, c2w_to_save.flatten())) + '\n')
-
-    print("Scene saved successfully.")
 
 
 def turtlebot_mapping(cfg, i):
@@ -815,15 +814,13 @@ def turtlebot_mapping(cfg, i):
     # create redis client 
     redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=False)
 
-    stored_batches = []
+    # create saver object 
+    saver =  save_scene_as_replica(cfg)
     # mapping
     for step in trange(num_frames):
         batch = data_loading(redis_client, rays_d, step, com_every, agent_i, max_depth)
-        stored_batches.append(batch)
         agent_i.run(step, batch)
-    
-    save_scene_as_replica(cfg, stored_batches)
-
+        saver.save_a_batch(step, batch)
 
 
 
